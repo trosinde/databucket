@@ -5,21 +5,19 @@
 - Docker und Docker Compose
 - Python 3.11+
 - `pip install boto3` (Minimum für CLI)
-- `pip install s3fs pandas minio` (optional, für direkte pandas-Nutzung und Key-Management)
+- `pip install s3fs pandas` (optional, für direkte pandas-Nutzung)
 
 ## Installation
 
 ```bash
-# 1. Repository klonen
 git clone git@github.com:trosinde/databucket.git
 cd databucket
-
-# 2. Installer ausführen
 ./install.sh
 ```
 
 Der Installer:
-- Prüft ob Docker und Docker Compose installiert sind
+- Prüft ob Docker, Docker Compose und Python installiert sind
+- Installiert `boto3` falls nicht vorhanden
 - Erstellt `/opt/databucket` als Installationsverzeichnis
 - Fragt MinIO-Credentials ab (User + Passwort, min. 8 Zeichen)
 - Erstellt das Docker-Netzwerk `databucket`
@@ -44,19 +42,18 @@ docker compose up -d       # Services starten
 sudo ln -s $(pwd)/databucket /usr/local/bin/databucket
 ```
 
-## databucket CLI
-
-Alle Operationen laufen über das einheitliche `databucket` Kommando.
+## databucket CLI — Vollständige Referenz
 
 ### Service-Management
 
 ```bash
 databucket start              # Services starten
 databucket stop               # Services stoppen
-databucket status             # Status aller Container anzeigen
-databucket logs               # Logs anzeigen (letzte 50 Zeilen)
+databucket status             # Status aller Container
+databucket logs               # Logs (letzte 50 Zeilen)
 databucket logs minio         # Logs eines einzelnen Service
 databucket update             # Images aktualisieren & Neustart
+databucket info               # Systemübersicht (Services, Buckets, Endpoints)
 ```
 
 ### Bucket-Verwaltung
@@ -65,43 +62,107 @@ databucket update             # Images aktualisieren & Neustart
 databucket bucket list        # Alle Buckets auflisten
 databucket bucket create raw  # Bucket anlegen
 databucket bucket delete raw  # Bucket löschen (muss leer sein)
+databucket bucket info raw    # Bucket-Statistik (Anzahl Objekte, Gesamtgröße)
 ```
 
 Empfohlene Grundstruktur:
 
 ```bash
-databucket bucket create raw          # Originaldaten
-databucket bucket create processed    # Transformierte Daten
+databucket bucket create raw          # Originaldaten, unveränderlich
+databucket bucket create processed    # Transformierte/bereinigte Daten
 databucket bucket create curated      # Analysefertige Daten
 ```
 
-### Dateien hochladen
+### Daten-Operationen
 
 ```bash
-# Einfacher Upload
+# Hochladen
 databucket upload report.pdf raw documents/2026/04/report.pdf
-
-# Mit Metadata und Tags
 databucket upload sensor.csv raw iot/2026/04/03/sensor.csv \
     --metadata source=gateway-01,format=csv \
     --tags project=alpha,status=unprocessed
-```
 
-### Dateien auflisten und herunterladen
-
-```bash
-# Objekte auflisten
+# Auflisten
 databucket ls raw
 databucket ls raw documents/2026/
 
 # Herunterladen
 databucket download raw documents/2026/04/report.pdf ./report.pdf
+
+# Objekt-Details (Metadata, Tags, Größe)
+databucket inspect raw documents/2026/04/report.pdf
 ```
 
-### Alle Befehle
+### Benutzerverwaltung
 
+```bash
+# Benutzer auflisten
+databucket user list
+
+# Benutzer anlegen
+databucket user create analyst sicheres-passwort
+
+# Policy zuweisen (Pflicht nach Erstellung!)
+databucket user policy analyst readonly
+
+# Benutzer-Details anzeigen
+databucket user info analyst
+
+# Benutzer deaktivieren / aktivieren
+databucket user disable analyst
+databucket user enable analyst
+
+# Benutzer löschen
+databucket user delete analyst
 ```
-databucket help
+
+### Policies (Zugriffsrechte)
+
+```bash
+# Verfügbare Policies auflisten
+databucket policy list
+
+# Policy-Details anzeigen
+databucket policy info readwrite
+```
+
+Eingebaute Policies:
+
+| Policy | Berechtigung |
+|--------|-------------|
+| `readonly` | Lesen auf alle Buckets |
+| `readwrite` | Lesen + Schreiben auf alle Buckets |
+| `writeonly` | Nur Schreiben auf alle Buckets |
+| `diagnostics` | Health/Info Endpoints |
+
+Eigene Policies (z.B. Zugriff nur auf bestimmte Buckets) können über die MinIO Console erstellt werden.
+
+### Backup
+
+```bash
+# Alle Daten lokal sichern (Standard: ./databucket-backup/)
+databucket backup
+
+# In ein bestimmtes Verzeichnis
+databucket backup /mnt/backup/databucket-2026-04-03
+```
+
+### Typischer Workflow: Neuen Benutzer einrichten
+
+```bash
+# 1. Benutzer anlegen
+databucket user create data-team geheim123!
+
+# 2. Nur Lesezugriff zuweisen
+databucket user policy data-team readonly
+
+# 3. Prüfen
+databucket user info data-team
+
+# 4. Benutzer kann sich jetzt mit eigenen Credentials verbinden:
+#    Access Key: data-team
+#    Secret Key: geheim123!
+#    Endpoint:   http://<server>:9000
 ```
 
 ## Python / boto3
@@ -130,13 +191,13 @@ s3.put_object(
     Metadata={"source": "api-import"},
 )
 
-# Objekt als Text lesen
+# Objekt lesen
 resp = s3.get_object(Bucket="raw", Key="data/file.json")
 content = resp["Body"].read().decode("utf-8")
 
 # Metadata und Tags abfragen
 head = s3.head_object(Bucket="raw", Key="data/file.json")
-print(head["Metadata"])  # {"source": "api-import"}
+print(head["Metadata"])
 
 tags = s3.get_object_tagging(Bucket="raw", Key="data/file.json")
 print(tags["TagSet"])
@@ -160,7 +221,7 @@ df = pd.read_csv(fs.open("raw/data/export.csv"))
 # Parquet lesen
 df = pd.read_parquet(fs.open("processed/results/analysis.parquet"))
 
-# Alle Dateien in einem Pfad auflisten
+# Dateien auflisten
 files = fs.ls("raw/documents/2026/")
 
 # Ergebnis zurückschreiben
@@ -192,48 +253,13 @@ Der MCP Server stellt 8 Tools für Claude und andere AI-Agenten bereit.
   "mcpServers": {
     "databucket": {
       "command": "docker",
-      "args": ["compose", "-f", "/pfad/zu/databucket/docker-compose.yaml",
+      "args": ["compose", "-f", "/opt/databucket/docker-compose.yaml",
                "exec", "mcp-server", "python", "server.py"],
       "env": {}
     }
   }
 }
 ```
-
-## Zugriffsverwaltung
-
-### Root Credentials
-
-Definiert in `.env`. Haben vollen Zugriff auf alle Buckets und Admin-Funktionen.
-
-### Weitere Benutzer anlegen
-
-MinIO verwaltet Benutzer über den `mc` CLI-Client:
-
-```bash
-# mc installieren (einmalig)
-docker compose exec minio mc alias set local http://localhost:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD
-
-# Benutzer anlegen
-docker compose exec minio mc admin user add local neuer-user sicheres-passwort
-
-# Policy zuweisen
-docker compose exec minio mc admin policy attach local readwrite --user neuer-user
-
-# Nur Lesezugriff
-docker compose exec minio mc admin policy attach local readonly --user neuer-user
-```
-
-### Eingebaute Policies
-
-| Policy | Berechtigung |
-|--------|-------------|
-| `readwrite` | Lesen + Schreiben auf alle Buckets |
-| `readonly` | Nur Lesen auf alle Buckets |
-| `writeonly` | Nur Schreiben auf alle Buckets |
-| `diagnostics` | Health/Info Endpoints |
-
-Eigene Policies (z.B. Zugriff nur auf bestimmte Buckets) können über die MinIO Console oder `mc admin policy create` erstellt werden.
 
 ## Troubleshooting
 
@@ -249,13 +275,17 @@ Häufige Ursache: `.env` fehlt oder Passwort zu kurz (MinIO erfordert min. 8 Zei
 
 ```bash
 databucket status
-curl http://localhost:9000/minio/health/live
 ```
 
 ### Access Denied
 
-Prüfe ob die Credentials in `/opt/databucket/.env` korrekt sind:
+```bash
+databucket info    # Prüft ob Credentials funktionieren
+```
+
+### Benutzer kann nicht zugreifen
 
 ```bash
-databucket bucket list
+databucket user info <name>     # Policy zugewiesen?
+databucket user enable <name>   # Benutzer aktiv?
 ```

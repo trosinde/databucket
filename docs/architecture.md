@@ -79,12 +79,14 @@ Dünner Wrapper um boto3. Stellt 8 Tools bereit:
 Befehle:
 
 ```
-databucket start|stop|status|logs     # Service-Management
-databucket update                      # Images aktualisieren & Neustart
-databucket bucket list|create|delete   # Bucket-Verwaltung
-databucket upload <file> <bucket> <key>
-databucket download <bucket> <key> <output>
-databucket ls <bucket> [prefix]
+databucket start|stop|status|logs|info   # Service-Management
+databucket update                         # Images aktualisieren & Neustart
+databucket bucket list|create|delete|info # Bucket-Verwaltung
+databucket upload|download|ls|inspect     # Daten-Operationen
+databucket user list|create|delete|info   # Benutzerverwaltung
+databucket user policy|enable|disable     # Zugriffssteuerung
+databucket policy list|info               # Policy-Verwaltung
+databucket backup [target]                # Vollbackup
 ```
 
 ## Datenmodell

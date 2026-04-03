@@ -18,51 +18,69 @@ _s3_env() {
     export AWS_SECRET_ACCESS_KEY="$MINIO_ROOT_PASSWORD"
 }
 
-# --- commands ---
-
-cmd_update() {
-    echo "Updating databucket..."
-    cd "$DATABUCKET_HOME"
-
-    # Pull latest images
-    _compose pull
-
-    # Rebuild MCP server
-    _compose build mcp-server
-
-    # Restart with new images
-    _compose up -d
-
-    echo "databucket updated."
-}
-
-cmd_status() {
-    _compose ps
-}
-
-cmd_start() {
-    _compose up -d
-    echo "databucket started."
-}
-
-cmd_stop() {
-    _compose down
-    echo "databucket stopped."
-}
-
-cmd_logs() {
-    _compose logs "${@:---tail=50}"
-}
-
-cmd_bucket_list() {
+_s3() {
     _s3_env
     python3 -c "
-import boto3
+import boto3, sys, json
 from botocore.config import Config
 s3 = boto3.client('s3', endpoint_url='$S3_ENDPOINT',
     aws_access_key_id='$AWS_ACCESS_KEY_ID',
     aws_secret_access_key='$AWS_SECRET_ACCESS_KEY',
     config=Config(signature_version='s3v4'))
+$1
+"
+}
+
+_mc() {
+    _s3_env
+    _compose exec -T minio mc alias set local http://localhost:9000 "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" --quiet 2>/dev/null || true
+    _compose exec -T minio mc "$@"
+}
+
+# ============================================================
+# SERVICE
+# ============================================================
+
+cmd_start()  { _compose up -d; echo "databucket started."; }
+cmd_stop()   { _compose down; echo "databucket stopped."; }
+cmd_status() { _compose ps; }
+cmd_logs()   { _compose logs "${@:---tail=50}"; }
+
+cmd_update() {
+    echo "Updating databucket..."
+    cd "$DATABUCKET_HOME"
+    _compose pull
+    _compose build mcp-server
+    _compose up -d
+    echo "databucket updated."
+}
+
+cmd_info() {
+    _s3_env
+    echo "databucket"
+    echo "  Home:     $DATABUCKET_HOME"
+    echo "  S3 API:   $S3_ENDPOINT"
+    echo "  Console:  http://localhost:${MINIO_CONSOLE_PORT:-9001}"
+    echo ""
+    echo "Services:"
+    _compose ps --format "  {{.Name}}\t{{.Status}}"
+    echo ""
+    echo "Buckets:"
+    _s3 "
+for b in s3.list_buckets()['Buckets']:
+    resp = s3.list_objects_v2(Bucket=b['Name'], MaxKeys=1)
+    count = resp.get('KeyCount', 0)
+    suffix = '(empty)' if count == 0 else ''
+    print(f\"  {b['Name']} {suffix}\")
+"
+}
+
+# ============================================================
+# BUCKETS
+# ============================================================
+
+cmd_bucket_list() {
+    _s3 "
 for b in s3.list_buckets()['Buckets']:
     print(b['Name'])
 "
@@ -70,14 +88,7 @@ for b in s3.list_buckets()['Buckets']:
 
 cmd_bucket_create() {
     [ -z "${1:-}" ] && { echo "Usage: databucket bucket create <name>"; exit 1; }
-    _s3_env
-    python3 -c "
-import boto3
-from botocore.config import Config
-s3 = boto3.client('s3', endpoint_url='$S3_ENDPOINT',
-    aws_access_key_id='$AWS_ACCESS_KEY_ID',
-    aws_secret_access_key='$AWS_SECRET_ACCESS_KEY',
-    config=Config(signature_version='s3v4'))
+    _s3 "
 s3.create_bucket(Bucket='$1')
 print('Created: $1')
 "
@@ -85,21 +96,39 @@ print('Created: $1')
 
 cmd_bucket_delete() {
     [ -z "${1:-}" ] && { echo "Usage: databucket bucket delete <name>"; exit 1; }
-    _s3_env
-    python3 -c "
-import boto3
-from botocore.config import Config
-s3 = boto3.client('s3', endpoint_url='$S3_ENDPOINT',
-    aws_access_key_id='$AWS_ACCESS_KEY_ID',
-    aws_secret_access_key='$AWS_SECRET_ACCESS_KEY',
-    config=Config(signature_version='s3v4'))
+    _s3 "
 s3.delete_bucket(Bucket='$1')
 print('Deleted: $1')
 "
 }
 
+cmd_bucket_info() {
+    [ -z "${1:-}" ] && { echo "Usage: databucket bucket info <name>"; exit 1; }
+    _s3 "
+import datetime
+paginator = s3.get_paginator('list_objects_v2')
+total_size = 0
+total_count = 0
+for page in paginator.paginate(Bucket='$1'):
+    for obj in page.get('Contents', []):
+        total_size += obj['Size']
+        total_count += 1
+def fmt(size):
+    for u in ['B','KB','MB','GB','TB']:
+        if size < 1024: return f'{size:.1f} {u}'
+        size /= 1024
+print(f'Bucket:  $1')
+print(f'Objects: {total_count}')
+print(f'Size:    {fmt(total_size)}')
+"
+}
+
+# ============================================================
+# DATA
+# ============================================================
+
 cmd_upload() {
-    [ -z "${3:-}" ] && { echo "Usage: databucket upload <file> <bucket> <key> [--metadata k=v ...] [--tags k=v ...]"; exit 1; }
+    [ -z "${3:-}" ] && { echo "Usage: databucket upload <file> <bucket> <key> [--metadata k=v,k=v] [--tags k=v,k=v]"; exit 1; }
     _s3_env
     local file="$1" bucket="$2" key="$3"
     shift 3
@@ -107,9 +136,9 @@ cmd_upload() {
     local metadata="" tags=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --metadata) shift; metadata="$1"; shift ;;
-            --tags) shift; tags="$1"; shift ;;
-            *) shift ;;
+            --metadata) shift; metadata="${1:-}"; shift || true ;;
+            --tags)     shift; tags="${1:-}"; shift || true ;;
+            *)          shift ;;
         esac
     done
 
@@ -135,14 +164,7 @@ print('Uploaded: s3://$bucket/$key')
 
 cmd_download() {
     [ -z "${3:-}" ] && { echo "Usage: databucket download <bucket> <key> <output>"; exit 1; }
-    _s3_env
-    python3 -c "
-import boto3
-from botocore.config import Config
-s3 = boto3.client('s3', endpoint_url='$S3_ENDPOINT',
-    aws_access_key_id='$AWS_ACCESS_KEY_ID',
-    aws_secret_access_key='$AWS_SECRET_ACCESS_KEY',
-    config=Config(signature_version='s3v4'))
+    _s3 "
 s3.download_file('$1', '$2', '$3')
 print('Downloaded: $3')
 "
@@ -150,64 +172,188 @@ print('Downloaded: $3')
 
 cmd_ls() {
     [ -z "${1:-}" ] && { echo "Usage: databucket ls <bucket> [prefix]"; exit 1; }
-    _s3_env
     local bucket="$1" prefix="${2:-}"
-    python3 -c "
-import boto3
-from botocore.config import Config
-s3 = boto3.client('s3', endpoint_url='$S3_ENDPOINT',
-    aws_access_key_id='$AWS_ACCESS_KEY_ID',
-    aws_secret_access_key='$AWS_SECRET_ACCESS_KEY',
-    config=Config(signature_version='s3v4'))
-resp = s3.list_objects_v2(Bucket='$bucket', Prefix='$prefix', MaxKeys=100)
+    _s3 "
+resp = s3.list_objects_v2(Bucket='$bucket', Prefix='$prefix', MaxKeys=200)
 for obj in resp.get('Contents', []):
     size = f\"{obj['Size']:>10}\"
     mod = obj['LastModified'].strftime('%Y-%m-%d %H:%M')
     print(f'{size}  {mod}  {obj[\"Key\"]}')
+if resp.get('IsTruncated'):
+    print(f'... truncated ({resp[\"KeyCount\"]} shown)')
 "
 }
+
+cmd_info_object() {
+    [ -z "${2:-}" ] && { echo "Usage: databucket info <bucket> <key>"; exit 1; }
+    _s3 "
+head = s3.head_object(Bucket='$1', Key='$2')
+tags_resp = s3.get_object_tagging(Bucket='$1', Key='$2')
+tags = {t['Key']: t['Value'] for t in tags_resp['TagSet']}
+meta = head.get('Metadata', {})
+def fmt(size):
+    for u in ['B','KB','MB','GB','TB']:
+        if size < 1024: return f'{size:.1f} {u}'
+        size /= 1024
+print(f'Key:          $2')
+print(f'Size:         {fmt(head[\"ContentLength\"])}')
+print(f'Content-Type: {head.get(\"ContentType\", \"\")}')
+print(f'Modified:     {head[\"LastModified\"].isoformat()}')
+print(f'ETag:         {head[\"ETag\"]}')
+if meta:
+    print('Metadata:')
+    for k, v in meta.items(): print(f'  {k}: {v}')
+if tags:
+    print('Tags:')
+    for k, v in tags.items(): print(f'  {k}: {v}')
+"
+}
+
+# ============================================================
+# USERS
+# ============================================================
+
+cmd_user_list()   { _mc admin user list local; }
+cmd_user_info()   { [ -z "${1:-}" ] && { echo "Usage: databucket user info <name>"; exit 1; }; _mc admin user info local "$1"; }
+cmd_user_create() { [ -z "${2:-}" ] && { echo "Usage: databucket user create <name> <password>"; exit 1; }; _mc admin user add local "$1" "$2"; echo "Created: $1 — assign policy: databucket user policy $1 readwrite"; }
+cmd_user_delete() { [ -z "${1:-}" ] && { echo "Usage: databucket user delete <name>"; exit 1; }; _mc admin user remove local "$1"; echo "Deleted: $1"; }
+cmd_user_enable() { [ -z "${1:-}" ] && { echo "Usage: databucket user enable <name>"; exit 1; }; _mc admin user enable local "$1"; echo "Enabled: $1"; }
+cmd_user_disable(){ [ -z "${1:-}" ] && { echo "Usage: databucket user disable <name>"; exit 1; }; _mc admin user disable local "$1"; echo "Disabled: $1"; }
+
+cmd_user_policy() {
+    [ -z "${2:-}" ] && { echo "Usage: databucket user policy <name> <policy>"; echo "Policies: readonly, readwrite, writeonly"; exit 1; }
+    _mc admin policy attach local "$2" --user "$1"
+    echo "Attached '$2' to user '$1'"
+}
+
+# ============================================================
+# POLICIES
+# ============================================================
+
+cmd_policy_list() { _mc admin policy list local; }
+cmd_policy_info() { [ -z "${1:-}" ] && { echo "Usage: databucket policy info <name>"; exit 1; }; _mc admin policy info local "$1"; }
+
+# ============================================================
+# BACKUP
+# ============================================================
+
+cmd_backup() {
+    local target="${1:-./databucket-backup}"
+    _s3_env
+    mkdir -p "$target"
+
+    echo "Backing up databucket to $target ..."
+    _s3 "
+import os
+paginator_buckets = s3.list_buckets()
+for bucket in paginator_buckets['Buckets']:
+    bname = bucket['Name']
+    paginator = s3.get_paginator('list_objects_v2')
+    for page in paginator.paginate(Bucket=bname):
+        for obj in page.get('Contents', []):
+            key = obj['Key']
+            local_path = os.path.join('$target', bname, key)
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            s3.download_file(bname, key, local_path)
+            print(f'  {bname}/{key}')
+"
+    echo "Backup complete: $target"
+}
+
+# ============================================================
+# HELP
+# ============================================================
 
 cmd_help() {
     cat <<'EOF'
 databucket — unstructured data storage
 
 Service:
-  databucket start             Start services
-  databucket stop              Stop services
-  databucket status            Show service status
-  databucket logs [service]    Show logs
-  databucket update            Pull latest images & restart
+  databucket start                            Start services
+  databucket stop                             Stop services
+  databucket status                           Show service status
+  databucket logs [service]                   Show logs
+  databucket update                           Pull latest images & restart
+  databucket info                             Show system overview
 
 Buckets:
-  databucket bucket list       List all buckets
-  databucket bucket create <n> Create a bucket
-  databucket bucket delete <n> Delete a bucket
+  databucket bucket list                      List all buckets
+  databucket bucket create <name>             Create a bucket
+  databucket bucket delete <name>             Delete a bucket
+  databucket bucket info <name>               Show bucket stats (objects, size)
 
 Data:
-  databucket upload <file> <bucket> <key>   Upload a file
-  databucket download <bucket> <key> <out>  Download a file
-  databucket ls <bucket> [prefix]           List objects
+  databucket upload <file> <bucket> <key>     Upload a file
+    [--metadata k=v,k=v] [--tags k=v,k=v]
+  databucket download <bucket> <key> <out>    Download a file
+  databucket ls <bucket> [prefix]             List objects
+  databucket inspect <bucket> <key>           Show object metadata & tags
+
+Users:
+  databucket user list                        List all users
+  databucket user create <name> <password>    Create a user
+  databucket user delete <name>               Delete a user
+  databucket user info <name>                 Show user details
+  databucket user policy <name> <policy>      Assign policy to user
+  databucket user enable <name>               Enable a user
+  databucket user disable <name>              Disable a user
+
+Policies:
+  databucket policy list                      List available policies
+  databucket policy info <name>               Show policy details
+  Built-in: readonly, readwrite, writeonly, diagnostics
+
+Backup:
+  databucket backup [target-dir]              Download all data to local dir
 EOF
 }
 
-# --- routing ---
+# ============================================================
+# ROUTING
+# ============================================================
 
 case "${1:-help}" in
-    update)         cmd_update ;;
-    status)         cmd_status ;;
     start)          cmd_start ;;
     stop)           cmd_stop ;;
+    status)         cmd_status ;;
     logs)           shift; cmd_logs "$@" ;;
+    update)         cmd_update ;;
+    info)
+        if [ -n "${2:-}" ] && [ -n "${3:-}" ]; then
+            cmd_info_object "$2" "$3"
+        else
+            cmd_info
+        fi ;;
+    inspect)        shift; cmd_info_object "$@" ;;
     bucket)
         case "${2:-}" in
             list)   cmd_bucket_list ;;
             create) cmd_bucket_create "${3:-}" ;;
             delete) cmd_bucket_delete "${3:-}" ;;
-            *)      echo "Usage: databucket bucket list|create|delete"; exit 1 ;;
+            info)   cmd_bucket_info "${3:-}" ;;
+            *)      echo "Usage: databucket bucket list|create|delete|info [name]"; exit 1 ;;
         esac ;;
     upload)         shift; cmd_upload "$@" ;;
     download)       shift; cmd_download "$@" ;;
     ls)             shift; cmd_ls "$@" ;;
+    user)
+        case "${2:-}" in
+            list)    cmd_user_list ;;
+            create)  cmd_user_create "${3:-}" "${4:-}" ;;
+            delete)  cmd_user_delete "${3:-}" ;;
+            info)    cmd_user_info "${3:-}" ;;
+            policy)  cmd_user_policy "${3:-}" "${4:-}" ;;
+            enable)  cmd_user_enable "${3:-}" ;;
+            disable) cmd_user_disable "${3:-}" ;;
+            *)       echo "Usage: databucket user list|create|delete|info|policy|enable|disable"; exit 1 ;;
+        esac ;;
+    policy)
+        case "${2:-}" in
+            list) cmd_policy_list ;;
+            info) cmd_policy_info "${3:-}" ;;
+            *)    echo "Usage: databucket policy list|info [name]"; exit 1 ;;
+        esac ;;
+    backup)         shift; cmd_backup "$@" ;;
     help|--help|-h) cmd_help ;;
-    *)              echo "Unknown command: $1"; cmd_help; exit 1 ;;
+    *)              echo "Unknown command: $1"; echo ""; cmd_help; exit 1 ;;
 esac
