@@ -44,18 +44,38 @@ docker compose up -d       # Services starten
 sudo ln -s $(pwd)/databucket /usr/local/bin/databucket
 ```
 
-## Buckets anlegen
+## databucket CLI
+
+Alle Operationen laufen über das einheitliche `databucket` Kommando.
+
+### Service-Management
 
 ```bash
-# Empfohlene Grundstruktur
-databucket bucket create raw
-databucket bucket create processed
-databucket bucket create curated
+databucket start              # Services starten
+databucket stop               # Services stoppen
+databucket status             # Status aller Container anzeigen
+databucket logs               # Logs anzeigen (letzte 50 Zeilen)
+databucket logs minio         # Logs eines einzelnen Service
+databucket update             # Images aktualisieren & Neustart
 ```
 
-## Dateien hochladen
+### Bucket-Verwaltung
 
-### Per CLI
+```bash
+databucket bucket list        # Alle Buckets auflisten
+databucket bucket create raw  # Bucket anlegen
+databucket bucket delete raw  # Bucket löschen (muss leer sein)
+```
+
+Empfohlene Grundstruktur:
+
+```bash
+databucket bucket create raw          # Originaldaten
+databucket bucket create processed    # Transformierte Daten
+databucket bucket create curated      # Analysefertige Daten
+```
+
+### Dateien hochladen
 
 ```bash
 # Einfacher Upload
@@ -63,11 +83,28 @@ databucket upload report.pdf raw documents/2026/04/report.pdf
 
 # Mit Metadata und Tags
 databucket upload sensor.csv raw iot/2026/04/03/sensor.csv \
-    --metadata source=gateway-01 format=csv \
-    --tags project=alpha status=unprocessed
+    --metadata source=gateway-01,format=csv \
+    --tags project=alpha,status=unprocessed
 ```
 
-### Per Python / boto3
+### Dateien auflisten und herunterladen
+
+```bash
+# Objekte auflisten
+databucket ls raw
+databucket ls raw documents/2026/
+
+# Herunterladen
+databucket download raw documents/2026/04/report.pdf ./report.pdf
+```
+
+### Alle Befehle
+
+```
+databucket help
+```
+
+## Python / boto3
 
 ```python
 import boto3
@@ -92,22 +129,20 @@ s3.put_object(
     ContentType="application/json",
     Metadata={"source": "api-import"},
 )
+
+# Objekt als Text lesen
+resp = s3.get_object(Bucket="raw", Key="data/file.json")
+content = resp["Body"].read().decode("utf-8")
+
+# Metadata und Tags abfragen
+head = s3.head_object(Bucket="raw", Key="data/file.json")
+print(head["Metadata"])  # {"source": "api-import"}
+
+tags = s3.get_object_tagging(Bucket="raw", Key="data/file.json")
+print(tags["TagSet"])
 ```
 
-## Dateien lesen
-
-### Per CLI
-
-```bash
-# Objekte auflisten
-databucket ls raw
-databucket ls raw --prefix documents/2026/
-
-# Herunterladen
-databucket download raw documents/2026/04/report.pdf ./report.pdf
-```
-
-### Per pandas / s3fs
+## pandas / s3fs
 
 ```python
 import pandas as pd
@@ -131,21 +166,6 @@ files = fs.ls("raw/documents/2026/")
 # Ergebnis zurückschreiben
 with fs.open("curated/report/summary.parquet", "wb") as f:
     df.to_parquet(f)
-```
-
-### Per Python / boto3
-
-```python
-# Objekt als Text lesen
-resp = s3.get_object(Bucket="raw", Key="data/file.json")
-content = resp["Body"].read().decode("utf-8")
-
-# Metadata und Tags abfragen
-head = s3.head_object(Bucket="raw", Key="data/file.json")
-print(head["Metadata"])  # {"source": "api-import"}
-
-tags = s3.get_object_tagging(Bucket="raw", Key="data/file.json")
-print(tags["TagSet"])
 ```
 
 ## MCP Server
@@ -220,25 +240,22 @@ Eigene Policies (z.B. Zugriff nur auf bestimmte Buckets) können über die MinIO
 ### MinIO startet nicht
 
 ```bash
-docker compose logs minio
+databucket logs minio
 ```
 
 Häufige Ursache: `.env` fehlt oder Passwort zu kurz (MinIO erfordert min. 8 Zeichen).
 
 ### Connection refused
 
-Prüfe ob der Port korrekt ist und MinIO healthy:
-
 ```bash
-docker compose ps
+databucket status
 curl http://localhost:9000/minio/health/live
 ```
 
 ### Access Denied
 
-Prüfe ob Access Key und Secret Key korrekt sind. Bei Env-Variablen:
+Prüfe ob die Credentials in `/opt/databucket/.env` korrekt sind:
 
 ```bash
-source .env
-databucket --access-key $MINIO_ROOT_USER --secret-key $MINIO_ROOT_PASSWORD bucket list
+databucket bucket list
 ```
