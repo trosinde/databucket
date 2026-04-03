@@ -27,12 +27,12 @@ databucket update                      # pull latest & restart
 ## Testing
 
 ```bash
-scripts/test.sh --all          # unit + e2e + coverage
-scripts/install-hooks.sh       # pre-push hook
+scripts/test.sh --all          # unit + e2e + coverage locally
+scripts/install-hooks.sh       # install pre-commit hook
 ```
 
-CI: GitHub Actions on push/PR (lint + unit + e2e)
-Auto-merge: development → main after successful CI
+Flow: commit (local tests) → push (pve3 e2e) → auto-merge to main
+Test system: LXC 300 on pve3 (192.168.100.130)
 
 ## Stack
 
