@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DATABUCKET_HOME="${DATABUCKET_HOME:-/opt/databucket}"
+
+# --- helpers ---
+
+_compose() {
+    docker compose -f "$DATABUCKET_HOME/docker-compose.yaml" --env-file "$DATABUCKET_HOME/.env" "$@"
+}
+
+_s3_env() {
+    set -a
+    source "$DATABUCKET_HOME/.env"
+    set +a
+    export S3_ENDPOINT="${S3_ENDPOINT:-http://localhost:${MINIO_API_PORT:-9000}}"
+    export AWS_ACCESS_KEY_ID="$MINIO_ROOT_USER"
+    export AWS_SECRET_ACCESS_KEY="$MINIO_ROOT_PASSWORD"
+}
+
+# --- commands ---
+
+cmd_update() {
+    echo "Updating databucket..."
+    cd "$DATABUCKET_HOME"
+
+    # Pull latest images
+    _compose pull
+
+    # Rebuild MCP server
+    _compose build mcp-server
+
+    # Restart with new images
+    _compose up -d
+
+    echo "databucket updated."
+}
+
+cmd_status() {
+    _compose ps
+}
+
+cmd_start() {
+    _compose up -d
+    echo "databucket started."
+}
+
+cmd_stop() {
+    _compose down
+    echo "databucket stopped."
+}
+
+cmd_logs() {
+    _compose logs "${@:---tail=50}"
+}
+
+cmd_bucket_list() {
+    _s3_env
+    python3 -c "
+import boto3
+from botocore.config import Config
+s3 = boto3.client('s3', endpoint_url='$S3_ENDPOINT',
+    aws_access_key_id='$AWS_ACCESS_KEY_ID',
+    aws_secret_access_key='$AWS_SECRET_ACCESS_KEY',
+    config=Config(signature_version='s3v4'))
+for b in s3.list_buckets()['Buckets']:
+    print(b['Name'])
+"
+}
+
+cmd_bucket_create() {
+    [ -z "${1:-}" ] && { echo "Usage: databucket bucket create <name>"; exit 1; }
+    _s3_env
+    python3 -c "
+import boto3
+from botocore.config import Config
+s3 = boto3.client('s3', endpoint_url='$S3_ENDPOINT',
+    aws_access_key_id='$AWS_ACCESS_KEY_ID',
+    aws_secret_access_key='$AWS_SECRET_ACCESS_KEY',
+    config=Config(signature_version='s3v4'))
+s3.create_bucket(Bucket='$1')
+print('Created: $1')
+"
+}
+
+cmd_bucket_delete() {
+    [ -z "${1:-}" ] && { echo "Usage: databucket bucket delete <name>"; exit 1; }
+    _s3_env
+    python3 -c "
+import boto3
+from botocore.config import Config
+s3 = boto3.client('s3', endpoint_url='$S3_ENDPOINT',
+    aws_access_key_id='$AWS_ACCESS_KEY_ID',
+    aws_secret_access_key='$AWS_SECRET_ACCESS_KEY',
+    config=Config(signature_version='s3v4'))
+s3.delete_bucket(Bucket='$1')
+print('Deleted: $1')
+"
+}
+
+cmd_upload() {
+    [ -z "${3:-}" ] && { echo "Usage: databucket upload <file> <bucket> <key> [--metadata k=v ...] [--tags k=v ...]"; exit 1; }
+    _s3_env
+    local file="$1" bucket="$2" key="$3"
+    shift 3
+
+    local metadata="" tags=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --metadata) shift; metadata="$1"; shift ;;
+            --tags) shift; tags="$1"; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    python3 -c "
+import boto3
+from botocore.config import Config
+s3 = boto3.client('s3', endpoint_url='$S3_ENDPOINT',
+    aws_access_key_id='$AWS_ACCESS_KEY_ID',
+    aws_secret_access_key='$AWS_SECRET_ACCESS_KEY',
+    config=Config(signature_version='s3v4'))
+extra = {}
+meta = '$metadata'
+tags = '$tags'
+if meta:
+    extra['Metadata'] = dict(kv.split('=', 1) for kv in meta.split(','))
+if tags:
+    from urllib.parse import urlencode
+    extra['Tagging'] = urlencode(dict(kv.split('=', 1) for kv in tags.split(',')))
+s3.upload_file('$file', '$bucket', '$key', ExtraArgs=extra or None)
+print('Uploaded: s3://$bucket/$key')
+"
+}
+
+cmd_download() {
+    [ -z "${3:-}" ] && { echo "Usage: databucket download <bucket> <key> <output>"; exit 1; }
+    _s3_env
+    python3 -c "
+import boto3
+from botocore.config import Config
+s3 = boto3.client('s3', endpoint_url='$S3_ENDPOINT',
+    aws_access_key_id='$AWS_ACCESS_KEY_ID',
+    aws_secret_access_key='$AWS_SECRET_ACCESS_KEY',
+    config=Config(signature_version='s3v4'))
+s3.download_file('$1', '$2', '$3')
+print('Downloaded: $3')
+"
+}
+
+cmd_ls() {
+    [ -z "${1:-}" ] && { echo "Usage: databucket ls <bucket> [prefix]"; exit 1; }
+    _s3_env
+    local bucket="$1" prefix="${2:-}"
+    python3 -c "
+import boto3
+from botocore.config import Config
+s3 = boto3.client('s3', endpoint_url='$S3_ENDPOINT',
+    aws_access_key_id='$AWS_ACCESS_KEY_ID',
+    aws_secret_access_key='$AWS_SECRET_ACCESS_KEY',
+    config=Config(signature_version='s3v4'))
+resp = s3.list_objects_v2(Bucket='$bucket', Prefix='$prefix', MaxKeys=100)
+for obj in resp.get('Contents', []):
+    size = f\"{obj['Size']:>10}\"
+    mod = obj['LastModified'].strftime('%Y-%m-%d %H:%M')
+    print(f'{size}  {mod}  {obj[\"Key\"]}')
+"
+}
+
+cmd_help() {
+    cat <<'EOF'
+databucket — unstructured data storage
+
+Service:
+  databucket start             Start services
+  databucket stop              Stop services
+  databucket status            Show service status
+  databucket logs [service]    Show logs
+  databucket update            Pull latest images & restart
+
+Buckets:
+  databucket bucket list       List all buckets
+  databucket bucket create <n> Create a bucket
+  databucket bucket delete <n> Delete a bucket
+
+Data:
+  databucket upload <file> <bucket> <key>   Upload a file
+  databucket download <bucket> <key> <out>  Download a file
+  databucket ls <bucket> [prefix]           List objects
+EOF
+}
+
+# --- routing ---
+
+case "${1:-help}" in
+    update)         cmd_update ;;
+    status)         cmd_status ;;
+    start)          cmd_start ;;
+    stop)           cmd_stop ;;
+    logs)           shift; cmd_logs "$@" ;;
+    bucket)
+        case "${2:-}" in
+            list)   cmd_bucket_list ;;
+            create) cmd_bucket_create "${3:-}" ;;
+            delete) cmd_bucket_delete "${3:-}" ;;
+            *)      echo "Usage: databucket bucket list|create|delete"; exit 1 ;;
+        esac ;;
+    upload)         shift; cmd_upload "$@" ;;
+    download)       shift; cmd_download "$@" ;;
+    ls)             shift; cmd_ls "$@" ;;
+    help|--help|-h) cmd_help ;;
+    *)              echo "Unknown command: $1"; cmd_help; exit 1 ;;
+esac

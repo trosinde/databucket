@@ -1,0 +1,8 @@
+# AIOS generated .gitignore
+# Knowledge data (project-specific, not committed)
+knowledge/
+
+# Keep context.yaml and agent-instructions.md tracked
+!context.yaml
+!agent-instructions.md
+!.gitignore

@@ -1,0 +1,63 @@
+# AIOS Project Context
+# Regenerate with: aios init --refresh
+
+schema_version: "1.0"
+name: databucket
+description: Unstructured data storage on MinIO (S3-compatible), accessed via MCP server, Python/pandas, and REST API
+type: project
+capabilities:
+  - s3-object-storage
+  - mcp-server
+  - cli-access-management
+exports:
+  - s3-api
+  - mcp-tools
+accepts:
+  - unstructured-data
+links: []
+config:
+  default_provider: claude
+  patterns_dir: ./patterns
+  personas_dir: ./personas
+  knowledge_dir: ./knowledge
+project:
+  domain: data
+  language: python
+  repo: git@github.com:trosinde/databucket.git
+aios:
+  path: /home/thorsten/dev/AIOS
+  readOnly: true
+compliance:
+  standards: []
+  requireTraceability: false
+  requireTestCoverage: false
+personas:
+  active:
+    - architect
+    - developer
+    - devops_engineer
+    - reviewer
+    - tech_writer
+  inactive:
+    - hmi_designer
+    - knowledge_curator
+    - network_security_expert
+    - pattern_designer
+    - penetration_tester
+    - procurement_manager
+    - product_marketer
+    - product_owner
+    - project_controller
+    - quality_manager
+    - re
+    - release_manager
+    - security_expert
+    - tester
+providers:
+  routing:
+    complex: anthropic
+    quick: ollama
+knowledge:
+  autoIndex:
+    - docs/**/*.md
+  autoExtract: false
