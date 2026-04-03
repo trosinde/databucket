@@ -158,6 +158,41 @@ Root Account (admin)
 | Auth | MinIO Access Keys | OAuth, JWT | Einfach, Token-basiert, pro Client konfigurierbar |
 | Deployment | Docker Compose | Kubernetes, Bare Metal | Einzelner Server, kein Orchestrierungsbedarf |
 
+## Testing & CI
+
+### Test-Pyramide
+
+```
+┌─────────────────────┐
+│    E2E Tests        │  CLI gegen echtes MinIO
+│  (test_cli_e2e.py)  │  Bucket/Data/User/Policy/Backup
+├─────────────────────┤
+│   Unit Tests        │  S3-Operationen gegen MinIO
+│(test_mcp_server.py) │  CRUD, Metadata, Tags, Range
+└─────────────────────┘
+```
+
+### Pipeline
+
+```
+Developer                    GitHub Actions
+    │                             │
+    ├── git push ──────────────►  │
+    │   (pre-push hook            ├── Lint (shellcheck, py_compile)
+    │    runs all tests locally)  ├── Unit Tests + Coverage
+    │                             ├── E2E Tests (MinIO Service Container)
+    │                             └── Result ✓/✗
+```
+
+### Lokal ausführen
+
+```bash
+scripts/test.sh              # nur Unit Tests
+scripts/test.sh --e2e        # + E2E Tests
+scripts/test.sh --all        # + Coverage Report
+scripts/install-hooks.sh     # Pre-Push Hook installieren
+```
+
 ## Backup & Recovery
 
 Das Docker Volume `databucket-data` enthält alle gespeicherten Daten. Empfehlung: Bind-Mount statt Docker Volume verwenden, um den Speicherort explizit zu kontrollieren:

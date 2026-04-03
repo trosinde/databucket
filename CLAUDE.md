@@ -18,12 +18,29 @@ databucket upload myfile.csv raw data/myfile.csv
 databucket update                      # pull latest & restart
 ```
 
+## Branching
+
+- `main` — stable, auto-merged from development after all tests pass
+- `development` — integration branch, PRs target this
+- Feature branches → PR → `development` → (CI passes) → auto-merge to `main`
+
+## Testing
+
+```bash
+scripts/test.sh --all          # unit + e2e + coverage
+scripts/install-hooks.sh       # pre-push hook
+```
+
+CI: GitHub Actions on push/PR (lint + unit + e2e)
+Auto-merge: development → main after successful CI
+
 ## Stack
 
 - MinIO (object storage)
 - Python 3.12 (MCP server, CLI)
 - boto3 / s3fs (S3 clients)
 - Docker Compose (deployment)
+- pytest (testing), GitHub Actions (CI)
 
 ## AIOS
 This project uses AIOS for orchestrated development workflows.

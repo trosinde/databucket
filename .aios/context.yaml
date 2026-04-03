@@ -38,10 +38,11 @@ personas:
     - devops_engineer
     - reviewer
     - tech_writer
+    - tester
+    - network_security_expert
   inactive:
     - hmi_designer
     - knowledge_curator
-    - network_security_expert
     - pattern_designer
     - penetration_tester
     - procurement_manager

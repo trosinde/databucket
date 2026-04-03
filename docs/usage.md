@@ -340,6 +340,43 @@ Der MCP Server stellt 8 Tools für Claude und andere AI-Agenten bereit.
 }
 ```
 
+## Testing
+
+### Voraussetzungen
+
+```bash
+pip install -e ".[test]"
+```
+
+### Tests ausführen
+
+```bash
+# Unit Tests (startet automatisch Test-MinIO via Docker)
+scripts/test.sh
+
+# Unit + E2E Tests
+scripts/test.sh --e2e
+
+# Mit Coverage Report
+scripts/test.sh --all
+```
+
+### Pre-Push Hook installieren
+
+```bash
+scripts/install-hooks.sh
+```
+
+Danach werden vor jedem `git push` automatisch alle Tests ausgeführt. Push wird blockiert wenn Tests fehlschlagen.
+
+### CI Pipeline
+
+Die GitHub Actions Pipeline (`.github/workflows/ci.yaml`) läuft automatisch bei jedem Push und Pull Request:
+
+1. **Lint** — shellcheck für Bash-Scripts, Syntax-Check für Python
+2. **Unit Tests** — S3-Operationen gegen MinIO Service Container
+3. **E2E Tests** — CLI-Befehle gegen echtes MinIO
+
 ## Troubleshooting
 
 ### MinIO startet nicht
