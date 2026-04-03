@@ -94,6 +94,32 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
+# Create MCP service account
+echo ""
+echo "Creating MCP service account..."
+MCP_KEY="${MCP_ACCESS_KEY:-mcp-service}"
+MCP_SECRET="${MCP_SECRET_KEY:-$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")}"
+_mc_setup() {
+    docker compose exec -T minio mc alias set local http://localhost:9000 "$MINIO_USER" "$MINIO_PASS" --quiet 2>/dev/null || true
+    docker compose exec -T minio mc admin user add local "$MCP_KEY" "$MCP_SECRET" 2>/dev/null || true
+    docker compose exec -T minio mc admin policy attach local readwrite --user "$MCP_KEY" 2>/dev/null || true
+}
+source "$INSTALL_DIR/.env"
+MINIO_USER="$MINIO_ROOT_USER"
+MINIO_PASS="$MINIO_ROOT_PASSWORD"
+_mc_setup
+
+# Update .env with MCP credentials
+if ! grep -q "MCP_ACCESS_KEY" "$INSTALL_DIR/.env"; then
+    cat >> "$INSTALL_DIR/.env" <<EOF
+MCP_ACCESS_KEY=${MCP_KEY}
+MCP_SECRET_KEY=${MCP_SECRET}
+EOF
+fi
+
+# Restart to pick up MCP credentials
+docker compose up -d
+
 # Install CLI
 echo ""
 echo "Installing databucket CLI..."

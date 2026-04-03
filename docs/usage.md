@@ -93,14 +93,24 @@ databucket download raw documents/2026/04/report.pdf ./report.pdf
 databucket inspect raw documents/2026/04/report.pdf
 ```
 
+### Als anderer Benutzer arbeiten
+
+```bash
+# Mit --as als bestimmter User agieren (Passwort wird interaktiv abgefragt)
+databucket --as analyst ls curated
+
+# Oder Passwort direkt angeben
+databucket --as analyst --password geheim123 ls curated
+```
+
 ### Benutzerverwaltung
 
 ```bash
 # Benutzer auflisten
 databucket user list
 
-# Benutzer anlegen
-databucket user create analyst sicheres-passwort
+# Benutzer anlegen (Passwort wird interaktiv abgefragt wenn weggelassen)
+databucket user create analyst
 
 # Policy zuweisen (Pflicht nach Erstellung!)
 databucket user policy analyst readonly
@@ -114,6 +124,33 @@ databucket user enable analyst
 
 # Benutzer löschen
 databucket user delete analyst
+```
+
+### API Keys (Service Account Keys)
+
+Jeder Benutzer kann zusätzliche API Keys bekommen — z.B. für Scripts, pandas-Zugriff oder externe Tools. API Keys erben die Rechte des Benutzers.
+
+```bash
+# API Key für einen Benutzer generieren
+databucket user key create analyst
+# → Access Key: XXXXXXXXXXXXXXXXXXXX
+# → Secret Key: YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+
+# Alle API Keys eines Benutzers auflisten
+databucket user key list analyst
+
+# API Key widerrufen
+databucket user key delete XXXXXXXXXXXXXXXXXXXX
+```
+
+Die generierten Keys können dann in Python/pandas verwendet werden:
+
+```python
+fs = s3fs.S3FileSystem(
+    endpoint_url="http://server:9000",
+    key="XXXXXXXXXXXXXXXXXXXX",      # generierter Access Key
+    secret="YYYYYYYY...",            # generierter Secret Key
+)
 ```
 
 ### Policies (Zugriffsrechte)
@@ -135,7 +172,42 @@ Eingebaute Policies:
 | `writeonly` | Nur Schreiben auf alle Buckets |
 | `diagnostics` | Health/Info Endpoints |
 
-Eigene Policies (z.B. Zugriff nur auf bestimmte Buckets) können über die MinIO Console erstellt werden.
+### Custom Policies (Bucket-Level Zugriff)
+
+Eigene Policies ermöglichen feingranularen Zugriff, z.B. nur auf bestimmte Buckets.
+
+Beispiel: Nur Lesezugriff auf den `curated` Bucket:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:ListBucket"],
+      "Resource": [
+        "arn:aws:s3:::curated",
+        "arn:aws:s3:::curated/*"
+      ]
+    }
+  ]
+}
+```
+
+```bash
+# Policy erstellen
+databucket policy create curated-readonly curated-readonly.json
+
+# Benutzer zuweisen
+databucket user policy analyst curated-readonly
+
+# Testen
+databucket --as analyst ls curated       # funktioniert
+databucket --as analyst ls raw           # Access Denied
+
+# Policy wieder löschen
+databucket policy delete curated-readonly
+```
 
 ### Backup
 
@@ -150,19 +222,26 @@ databucket backup /mnt/backup/databucket-2026-04-03
 ### Typischer Workflow: Neuen Benutzer einrichten
 
 ```bash
-# 1. Benutzer anlegen
-databucket user create data-team geheim123!
+# 1. Benutzer anlegen (Passwort wird interaktiv abgefragt)
+databucket user create data-team
 
-# 2. Nur Lesezugriff zuweisen
-databucket user policy data-team readonly
+# 2. Zugriff nur auf curated-Bucket
+databucket policy create curated-ro curated-readonly.json
+databucket user policy data-team curated-ro
 
-# 3. Prüfen
-databucket user info data-team
+# 3. API Key für pandas/Scripts generieren
+databucket user key create data-team
+# → Access Key: XXXXXXXXXXXXXXXXXXXX
+# → Secret Key: YYYYYYYY...
 
-# 4. Benutzer kann sich jetzt mit eigenen Credentials verbinden:
-#    Access Key: data-team
-#    Secret Key: geheim123!
-#    Endpoint:   http://<server>:9000
+# 4. Testen
+databucket --as data-team ls curated     # OK
+databucket --as data-team ls raw         # Access Denied
+
+# 5. Benutzer gibt den API Key in seinem Script an:
+#    endpoint:   http://<server>:9000
+#    access_key: XXXXXXXXXXXXXXXXXXXX
+#    secret_key: YYYYYYYY...
 ```
 
 ## Python / boto3

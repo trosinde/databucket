@@ -120,9 +120,33 @@ curated/        ← Analysefertige Daten
 | pandas / s3fs | S3 | Access Key | Datenanalyse |
 | boto3 direkt | S3 | Access Key | Automatisierung, Scripts |
 | CLI (`databucket`) | S3 (via boto3) | Access Key / Env | Admin, Upload/Download |
-| MCP Server | MCP → S3 | Server-intern | Claude, AI-Agenten |
+| MCP Server | MCP → S3 | Service Account (readwrite) | Claude, AI-Agenten |
 | MinIO Console | HTTP | Root Credentials | Browser-Verwaltung |
 | curl / REST | S3 | Signierte Requests | Integration |
+
+## Zugriffsmodell
+
+```
+Root Account (admin)
+├── kann alles: Buckets, Users, Policies
+│
+├── MCP Service Account (mcp-service)
+│   └── readwrite — automatisch vom Installer angelegt
+│
+├── User: analyst
+│   ├── Policy: curated-readonly (custom)
+│   └── API Keys: XXXX... (für pandas/Scripts)
+│
+└── User: importer
+    ├── Policy: raw-writeonly (custom)
+    └── API Keys: YYYY... (für Import-Scripts)
+```
+
+- **Root Account:** Nur für Admin-Operationen (`databucket user`, `databucket policy`)
+- **MCP Service Account:** Eigener User mit `readwrite`, nicht Root. Vom Installer angelegt.
+- **Benutzer:** Werden via `databucket user create` angelegt, bekommen Policies zugewiesen
+- **API Keys:** Pro User generierbar via `databucket user key create`, erben die User-Policy
+- **Custom Policies:** Bucket-Level Zugriff via JSON Policy-Dateien
 
 ## Entscheidungen
 

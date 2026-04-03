@@ -2,8 +2,39 @@
 set -euo pipefail
 
 DATABUCKET_HOME="${DATABUCKET_HOME:-/opt/databucket}"
+DATABUCKET_USER=""
+DATABUCKET_PASS=""
 
-# --- helpers ---
+# ============================================================
+# GLOBAL FLAGS (parsed before command routing)
+# ============================================================
+
+_parse_global_flags() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --as)
+                shift
+                DATABUCKET_USER="${1:-}"
+                [ -z "$DATABUCKET_USER" ] && { echo "ERROR: --as requires a username"; exit 1; }
+                shift
+                if [ "${1:-}" = "--password" ]; then
+                    shift; DATABUCKET_PASS="${1:-}"; shift
+                else
+                    read -rsp "Password for $DATABUCKET_USER: " DATABUCKET_PASS; echo ""
+                fi
+                ;;
+            *)  ARGS+=("$1"); shift ;;
+        esac
+    done
+}
+
+ARGS=()
+_parse_global_flags "$@"
+set -- "${ARGS[@]:-}"
+
+# ============================================================
+# HELPERS
+# ============================================================
 
 _compose() {
     docker compose -f "$DATABUCKET_HOME/docker-compose.yaml" --env-file "$DATABUCKET_HOME/.env" "$@"
@@ -14,8 +45,13 @@ _s3_env() {
     source "$DATABUCKET_HOME/.env"
     set +a
     export S3_ENDPOINT="${S3_ENDPOINT:-http://localhost:${MINIO_API_PORT:-9000}}"
-    export AWS_ACCESS_KEY_ID="$MINIO_ROOT_USER"
-    export AWS_SECRET_ACCESS_KEY="$MINIO_ROOT_PASSWORD"
+    if [ -n "$DATABUCKET_USER" ]; then
+        export AWS_ACCESS_KEY_ID="$DATABUCKET_USER"
+        export AWS_SECRET_ACCESS_KEY="$DATABUCKET_PASS"
+    else
+        export AWS_ACCESS_KEY_ID="$MINIO_ROOT_USER"
+        export AWS_SECRET_ACCESS_KEY="$MINIO_ROOT_PASSWORD"
+    fi
 }
 
 _s3() {
@@ -61,6 +97,7 @@ cmd_info() {
     echo "  Home:     $DATABUCKET_HOME"
     echo "  S3 API:   $S3_ENDPOINT"
     echo "  Console:  http://localhost:${MINIO_CONSOLE_PORT:-9001}"
+    [ -n "$DATABUCKET_USER" ] && echo "  User:     $DATABUCKET_USER"
     echo ""
     echo "Services:"
     _compose ps --format "  {{.Name}}\t{{.Status}}"
@@ -105,7 +142,6 @@ print('Deleted: $1')
 cmd_bucket_info() {
     [ -z "${1:-}" ] && { echo "Usage: databucket bucket info <name>"; exit 1; }
     _s3 "
-import datetime
 paginator = s3.get_paginator('list_objects_v2')
 total_size = 0
 total_count = 0
@@ -184,8 +220,8 @@ if resp.get('IsTruncated'):
 "
 }
 
-cmd_info_object() {
-    [ -z "${2:-}" ] && { echo "Usage: databucket info <bucket> <key>"; exit 1; }
+cmd_inspect() {
+    [ -z "${2:-}" ] && { echo "Usage: databucket inspect <bucket> <key>"; exit 1; }
     _s3 "
 head = s3.head_object(Bucket='$1', Key='$2')
 tags_resp = s3.get_object_tagging(Bucket='$1', Key='$2')
@@ -215,13 +251,42 @@ if tags:
 
 cmd_user_list()   { _mc admin user list local; }
 cmd_user_info()   { [ -z "${1:-}" ] && { echo "Usage: databucket user info <name>"; exit 1; }; _mc admin user info local "$1"; }
-cmd_user_create() { [ -z "${2:-}" ] && { echo "Usage: databucket user create <name> <password>"; exit 1; }; _mc admin user add local "$1" "$2"; echo "Created: $1 — assign policy: databucket user policy $1 readwrite"; }
+
+cmd_user_create() {
+    [ -z "${1:-}" ] && { echo "Usage: databucket user create <name> [password]"; exit 1; }
+    local username="$1"
+    local password="${2:-}"
+    if [ -z "$password" ]; then
+        read -rsp "Password for $username (min 8 chars): " password; echo ""
+        [ ${#password} -lt 8 ] && { echo "ERROR: Password must be at least 8 characters."; exit 1; }
+    fi
+    _mc admin user add local "$username" "$password"
+    echo "Created: $username"
+    echo "Next: databucket user policy $username readwrite"
+}
+
 cmd_user_delete() { [ -z "${1:-}" ] && { echo "Usage: databucket user delete <name>"; exit 1; }; _mc admin user remove local "$1"; echo "Deleted: $1"; }
 cmd_user_enable() { [ -z "${1:-}" ] && { echo "Usage: databucket user enable <name>"; exit 1; }; _mc admin user enable local "$1"; echo "Enabled: $1"; }
 cmd_user_disable(){ [ -z "${1:-}" ] && { echo "Usage: databucket user disable <name>"; exit 1; }; _mc admin user disable local "$1"; echo "Disabled: $1"; }
 
+cmd_user_key_create() {
+    [ -z "${1:-}" ] && { echo "Usage: databucket user key create <username>"; exit 1; }
+    _mc admin user svcacct add local "$1"
+}
+
+cmd_user_key_list() {
+    [ -z "${1:-}" ] && { echo "Usage: databucket user key list <username>"; exit 1; }
+    _mc admin user svcacct list local "$1"
+}
+
+cmd_user_key_delete() {
+    [ -z "${1:-}" ] && { echo "Usage: databucket user key delete <access-key>"; exit 1; }
+    _mc admin user svcacct remove local "$1"
+    echo "Deleted key: $1"
+}
+
 cmd_user_policy() {
-    [ -z "${2:-}" ] && { echo "Usage: databucket user policy <name> <policy>"; echo "Policies: readonly, readwrite, writeonly"; exit 1; }
+    [ -z "${2:-}" ] && { echo "Usage: databucket user policy <name> <policy>"; echo ""; echo "Built-in policies: readonly, readwrite, writeonly"; echo "Custom policies:   databucket policy list"; exit 1; }
     _mc admin policy attach local "$2" --user "$1"
     echo "Attached '$2' to user '$1'"
 }
@@ -232,6 +297,47 @@ cmd_user_policy() {
 
 cmd_policy_list() { _mc admin policy list local; }
 cmd_policy_info() { [ -z "${1:-}" ] && { echo "Usage: databucket policy info <name>"; exit 1; }; _mc admin policy info local "$1"; }
+
+cmd_policy_create() {
+    [ -z "${2:-}" ] && { echo "Usage: databucket policy create <name> <json-file>"; echo ""; _policy_create_help; exit 1; }
+    local name="$1" file="$2"
+    [ ! -f "$file" ] && { echo "ERROR: File not found: $file"; exit 1; }
+    # Copy policy file into container and apply
+    docker cp "$file" "$(_compose ps -q minio):/tmp/policy.json"
+    _mc admin policy create local "$name" /tmp/policy.json
+    echo "Created policy: $name"
+}
+
+cmd_policy_delete() {
+    [ -z "${1:-}" ] && { echo "Usage: databucket policy delete <name>"; exit 1; }
+    _mc admin policy remove local "$1"
+    echo "Deleted policy: $1"
+}
+
+_policy_create_help() {
+    cat <<'POLICYEOF'
+Example: Allow read-only access to the 'curated' bucket only.
+
+Save as curated-readonly.json:
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:ListBucket"],
+      "Resource": [
+        "arn:aws:s3:::curated",
+        "arn:aws:s3:::curated/*"
+      ]
+    }
+  ]
+}
+
+Then run:
+  databucket policy create curated-readonly curated-readonly.json
+  databucket user policy analyst curated-readonly
+POLICYEOF
+}
 
 # ============================================================
 # BACKUP
@@ -268,6 +374,10 @@ cmd_help() {
     cat <<'EOF'
 databucket — unstructured data storage
 
+Global flags:
+  --as <user> [--password <pass>]     Run command as a specific user
+                                      (prompts for password if omitted)
+
 Service:
   databucket start                            Start services
   databucket stop                             Stop services
@@ -280,7 +390,7 @@ Buckets:
   databucket bucket list                      List all buckets
   databucket bucket create <name>             Create a bucket
   databucket bucket delete <name>             Delete a bucket
-  databucket bucket info <name>               Show bucket stats (objects, size)
+  databucket bucket info <name>               Show bucket stats
 
 Data:
   databucket upload <file> <bucket> <key>     Upload a file
@@ -291,20 +401,31 @@ Data:
 
 Users:
   databucket user list                        List all users
-  databucket user create <name> <password>    Create a user
+  databucket user create <name> [password]    Create a user (prompts if omitted)
   databucket user delete <name>               Delete a user
   databucket user info <name>                 Show user details
   databucket user policy <name> <policy>      Assign policy to user
   databucket user enable <name>               Enable a user
   databucket user disable <name>              Disable a user
+  databucket user key create <name>           Generate API key for user
+  databucket user key list <name>             List API keys for user
+  databucket user key delete <access-key>     Revoke an API key
 
 Policies:
-  databucket policy list                      List available policies
+  databucket policy list                      List all policies
   databucket policy info <name>               Show policy details
+  databucket policy create <name> <json>      Create custom policy from JSON
+  databucket policy delete <name>             Delete a custom policy
   Built-in: readonly, readwrite, writeonly, diagnostics
 
 Backup:
   databucket backup [target-dir]              Download all data to local dir
+
+Examples:
+  databucket user create analyst              # interactive password
+  databucket policy create curated-ro p.json  # bucket-level access
+  databucket user policy analyst curated-ro
+  databucket --as analyst ls curated          # test as that user
 EOF
 }
 
@@ -318,13 +439,8 @@ case "${1:-help}" in
     status)         cmd_status ;;
     logs)           shift; cmd_logs "$@" ;;
     update)         cmd_update ;;
-    info)
-        if [ -n "${2:-}" ] && [ -n "${3:-}" ]; then
-            cmd_info_object "$2" "$3"
-        else
-            cmd_info
-        fi ;;
-    inspect)        shift; cmd_info_object "$@" ;;
+    info)           cmd_info ;;
+    inspect)        shift; cmd_inspect "$@" ;;
     bucket)
         case "${2:-}" in
             list)   cmd_bucket_list ;;
@@ -345,13 +461,22 @@ case "${1:-help}" in
             policy)  cmd_user_policy "${3:-}" "${4:-}" ;;
             enable)  cmd_user_enable "${3:-}" ;;
             disable) cmd_user_disable "${3:-}" ;;
-            *)       echo "Usage: databucket user list|create|delete|info|policy|enable|disable"; exit 1 ;;
+            key)
+                case "${3:-}" in
+                    create) cmd_user_key_create "${4:-}" ;;
+                    list)   cmd_user_key_list "${4:-}" ;;
+                    delete) cmd_user_key_delete "${4:-}" ;;
+                    *)      echo "Usage: databucket user key create|list|delete"; exit 1 ;;
+                esac ;;
+            *)       echo "Usage: databucket user list|create|delete|info|policy|enable|disable|key"; exit 1 ;;
         esac ;;
     policy)
         case "${2:-}" in
-            list) cmd_policy_list ;;
-            info) cmd_policy_info "${3:-}" ;;
-            *)    echo "Usage: databucket policy list|info [name]"; exit 1 ;;
+            list)   cmd_policy_list ;;
+            info)   cmd_policy_info "${3:-}" ;;
+            create) cmd_policy_create "${3:-}" "${4:-}" ;;
+            delete) cmd_policy_delete "${3:-}" ;;
+            *)      echo "Usage: databucket policy list|info|create|delete [name]"; exit 1 ;;
         esac ;;
     backup)         shift; cmd_backup "$@" ;;
     help|--help|-h) cmd_help ;;
