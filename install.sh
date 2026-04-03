@@ -9,7 +9,7 @@ echo "=== databucket installer ==="
 echo ""
 
 # Check dependencies
-for cmd in docker git; do
+for cmd in docker git python3; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "ERROR: $cmd is required but not installed."
         exit 1
@@ -19,6 +19,11 @@ done
 if ! docker compose version &>/dev/null; then
     echo "ERROR: docker compose plugin is required."
     exit 1
+fi
+
+if ! python3 -c "import boto3" 2>/dev/null; then
+    echo "Installing boto3..."
+    pip install --quiet boto3
 fi
 
 # Install directory

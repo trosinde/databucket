@@ -5,10 +5,14 @@ Unstructured data storage on MinIO (S3-compatible). TB-scale, Docker-deployed.
 ## Install
 
 ```bash
+git clone git@github.com:trosinde/databucket.git
+cd databucket
 ./install.sh
 ```
 
-The installer sets up Docker network, credentials, builds and starts all services, and installs the `databucket` CLI to `/usr/local/bin`.
+Requires: Docker, Docker Compose, Python 3.11+, `pip install boto3`
+
+The installer sets up the Docker network, prompts for credentials, builds and starts all services, and installs the `databucket` CLI to `/usr/local/bin`.
 
 ## Quick Start
 

@@ -3,29 +3,46 @@
 ## Voraussetzungen
 
 - Docker und Docker Compose
-- Python 3.11+ (für CLI und direkte pandas-Nutzung)
-- `pip install boto3 s3fs pandas minio` (für Client-seitige Nutzung und CLI Key-Management)
+- Python 3.11+
+- `pip install boto3` (Minimum für CLI)
+- `pip install s3fs pandas minio` (optional, für direkte pandas-Nutzung und Key-Management)
 
-## Setup
+## Installation
 
 ```bash
 # 1. Repository klonen
 git clone git@github.com:trosinde/databucket.git
 cd databucket
 
-# 2. Credentials konfigurieren
-cp .env.example .env
-# .env editieren — sicheres Passwort setzen!
-
-# 3. Starten
-docker compose up -d
-
-# 4. Prüfen
-docker compose ps
-# minio sollte "healthy" sein
+# 2. Installer ausführen
+./install.sh
 ```
 
-MinIO Console: `http://<server>:9001` (Login mit Root Credentials aus `.env`)
+Der Installer:
+- Prüft ob Docker und Docker Compose installiert sind
+- Erstellt `/opt/databucket` als Installationsverzeichnis
+- Fragt MinIO-Credentials ab (User + Passwort, min. 8 Zeichen)
+- Erstellt das Docker-Netzwerk `databucket`
+- Baut und startet MinIO + MCP Server
+- Installiert das `databucket` CLI nach `/usr/local/bin`
+
+Nach der Installation:
+- MinIO API: `http://localhost:9000`
+- MinIO Console: `http://localhost:9001` (Login mit den gewählten Credentials)
+
+### Benutzerdefiniertes Installationsverzeichnis
+
+```bash
+DATABUCKET_HOME=/srv/databucket ./install.sh
+```
+
+### Manuelles Setup (ohne Installer)
+
+```bash
+cp .env.example .env       # Credentials eintragen
+docker compose up -d       # Services starten
+sudo ln -s $(pwd)/databucket /usr/local/bin/databucket
+```
 
 ## Buckets anlegen
 
