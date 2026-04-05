@@ -281,6 +281,58 @@ class TestUserSwitchE2E:
                        capture_output=True, env=ENV)
 
 
+class TestSearchE2E:
+    """E2E tests for semantic search (requires indexer running)."""
+
+    @pytest.fixture(autouse=True)
+    def setup_bucket(self):
+        run(["bucket", "create", "e2e-search-test"])
+        yield
+        subprocess.run([CLI, "bucket", "delete", "e2e-search-test"],
+                       capture_output=True, env=ENV)
+
+    def _indexer_available(self):
+        import urllib.request
+        try:
+            urllib.request.urlopen("http://localhost:8900/health", timeout=2)
+            return True
+        except Exception:
+            return False
+
+    def test_index_and_search(self, tmp_path):
+        if not self._indexer_available():
+            pytest.skip("Indexer not running")
+
+        # Upload test file
+        src = tmp_path / "searchable.txt"
+        src.write_text("Artificial intelligence and machine learning in healthcare applications")
+        run(["upload", str(src), "e2e-search-test", "ai-healthcare.txt"])
+
+        # Index the bucket
+        r = run(["index", "e2e-search-test"])
+        assert "Indexed" in r.stdout
+
+        # Search
+        r = run(["search", "AI in healthcare"])
+        assert "ai-healthcare.txt" in r.stdout
+
+    def test_search_no_results(self):
+        if not self._indexer_available():
+            pytest.skip("Indexer not running")
+
+        r = run(["search", "xyzzy_completely_unique_nonsense_query_12345"])
+        # Should not error, may return "No results"
+        assert r.returncode == 0
+
+    def test_search_no_args(self):
+        r = run(["search"], check=False)
+        assert r.returncode == 1
+
+    def test_index_no_args(self):
+        r = run(["index"], check=False)
+        assert r.returncode == 1
+
+
 class TestUsageErrors:
     def test_bucket_no_args(self):
         r = run(["bucket"], check=False)

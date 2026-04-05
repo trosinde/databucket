@@ -18,16 +18,25 @@ graph LR
         api[MinIO S3 API :9000]
         web[MinIO Console :9001]
         mcps[MCP Server]
+        idx[Indexer :8900]
+        qdr[Qdrant :6333]
         vol[(databucket-data Volume)]
+        qvol[(qdrant-data Volume)]
     end
 
     pandas -->|S3 Protokoll| api
     cli -->|boto3| api
+    cli -->|HTTP| idx
     curl -->|HTTP PUT/GET| api
     console -->|HTTP| web
     mcp -->|MCP Tools| mcps
     mcps -->|boto3| api
+    mcps -->|HTTP| idx
+    api -->|Webhook| idx
+    idx -->|Embeddings| qdr
+    idx -->|boto3| api
     api --> vol
+    qdr --> qvol
 ```
 
 ## Komponenten
@@ -54,7 +63,7 @@ MinIO ist die einzige Storage-Komponente. Es gibt keine Datenbank, keinen Cache,
 | S3 Client | boto3 |
 | Transport | stdio |
 
-Dünner Wrapper um boto3. Stellt 8 Tools bereit:
+Dünner Wrapper um boto3. Stellt 9 Tools bereit:
 
 | Tool | Funktion |
 |------|----------|
@@ -66,6 +75,38 @@ Dünner Wrapper um boto3. Stellt 8 Tools bereit:
 | `delete_object` | Objekt löschen |
 | `create_bucket` | Bucket anlegen |
 | `search_by_prefix` | Objekte nach Pfad-Prefix suchen |
+| `semantic_search` | KI-Suche über Inhalte (via Indexer/Qdrant) |
+
+### Qdrant (Vector DB)
+
+| Eigenschaft | Wert |
+|-------------|------|
+| Typ | Vector-Datenbank |
+| Image | `qdrant/qdrant:latest` |
+| API | Port 6333 (REST + gRPC) |
+| Daten | Docker Volume `qdrant-data` |
+
+Speichert Embeddings der indexierten Objekte. Ermöglicht semantische Suche (Similarity Search) über Dateiinhalte.
+
+### Indexer (Semantic Search)
+
+| Eigenschaft | Wert |
+|-------------|------|
+| Sprache | Python 3.12 |
+| Framework | FastAPI + Uvicorn |
+| Embedding | `all-MiniLM-L6-v2` (384 Dimensionen, CPU) |
+| Port | 8900 |
+
+Empfängt MinIO Webhook-Notifications bei Upload/Delete, extrahiert Text aus Objekten (TXT, CSV, JSON, PDF), erzeugt Embeddings und speichert sie in Qdrant.
+
+| Endpoint | Funktion |
+|----------|----------|
+| `POST /webhook` | MinIO Bucket Notification Empfänger |
+| `POST /search` | Semantische Suche (query, bucket?, limit?) |
+| `POST /index/{bucket}` | Manueller Re-Index eines Buckets |
+| `GET /health` | Health Check |
+
+Unterstützte Formate: Text, CSV, JSON, PDF (mit PyMuPDF), XML/HTML. Binärdateien werden übersprungen.
 
 ### CLI (`databucket`)
 
@@ -83,6 +124,7 @@ databucket start|stop|status|logs|info   # Service-Management
 databucket update                         # Images aktualisieren & Neustart
 databucket bucket list|create|delete|info # Bucket-Verwaltung
 databucket upload|download|ls|inspect     # Daten-Operationen
+databucket search|index                   # Semantische Suche
 databucket user list|create|delete|info   # Benutzerverwaltung
 databucket user policy|enable|disable     # Zugriffssteuerung
 databucket policy list|info               # Policy-Verwaltung
@@ -213,8 +255,8 @@ Backup-Optionen:
 
 ## Grenzen
 
-- **Keine Volltextsuche** über Dateiinhalte. Nur Pfad, Metadata und Tags sind durchsuchbar. Für Volltextsuche: Suchengine (z.B. Meilisearch) nachrüsten.
 - **Kein Processing.** Daten werden gespeichert wie geliefert. ETL/Transformation ist Sache der Clients.
 - **Single Node.** Kein Cluster, keine Replikation.
-- **MCP Server liest nur Text.** Binärdateien (Bilder, PDFs) können über den MCP Server nur als Metadata angezeigt werden, nicht inhaltlich gelesen.
+- **Semantic Search ist textbasiert.** Bilder und andere Binärdateien werden nicht indexiert (nur Text, CSV, JSON, PDF).
+- **Semantic Search hat kein Access Control.** Die Suche durchsucht alle indexierten Objekte unabhängig von MinIO-Policies. Alle Benutzer mit Zugriff auf die CLI/MCP können Previews aller indexierten Inhalte sehen. Für Szenarien mit strikter Bucket-Isolation muss die Suche um Policy-Checks erweitert werden.
 - **MCP Transport ist stdio.** Aktuell nur lokal nutzbar. Für Netzwerk-Zugriff muss auf SSE oder Streamable HTTP umgestellt werden.

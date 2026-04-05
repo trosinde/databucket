@@ -35,6 +35,7 @@ sudo chown "$(id -u):$(id -g)" "$INSTALL_DIR"
 echo "Copying files..."
 cp -r "$SCRIPT_DIR/docker-compose.yaml" "$INSTALL_DIR/"
 cp -r "$SCRIPT_DIR/mcp-server" "$INSTALL_DIR/"
+cp -r "$SCRIPT_DIR/indexer" "$INSTALL_DIR/"
 cp -r "$SCRIPT_DIR/docs" "$INSTALL_DIR/" 2>/dev/null || true
 
 # .env setup
@@ -54,6 +55,8 @@ MINIO_ROOT_USER=${MINIO_USER}
 MINIO_ROOT_PASSWORD=${MINIO_PASS}
 MINIO_API_PORT=9000
 MINIO_CONSOLE_PORT=9001
+QDRANT_PORT=6333
+INDEXER_PORT=8900
 EOF
     chmod 600 "$INSTALL_DIR/.env"
     echo "Credentials saved to $INSTALL_DIR/.env"
@@ -117,8 +120,47 @@ MCP_SECRET_KEY=${MCP_SECRET}
 EOF
 fi
 
-# Restart to pick up MCP credentials
+# Restart to pick up MCP credentials and start all services
 docker compose up -d
+
+# Wait for indexer to become healthy
+echo "Waiting for indexer to start..."
+for i in $(seq 1 60); do
+    if curl -sf http://localhost:${INDEXER_PORT:-8900}/health >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+
+# Configure MinIO webhook notifications for auto-indexing
+echo ""
+echo "Configuring auto-indexing (MinIO → Indexer)..."
+_mc_setup_webhook() {
+    docker compose exec -T minio mc alias set local http://localhost:9000 "$MINIO_USER" "$MINIO_PASS" --quiet 2>/dev/null || true
+    # Set up webhook target pointing to the indexer service
+    docker compose exec -T minio mc admin config set local notify_webhook:indexer \
+        endpoint="http://indexer:8900/webhook" \
+        queue_dir="" \
+        queue_limit="0" \
+        2>/dev/null || true
+    # Restart MinIO to apply notification config
+    docker compose exec -T minio mc admin service restart local 2>/dev/null || true
+}
+_mc_setup_webhook
+sleep 3
+
+# Enable notifications on existing buckets
+_enable_bucket_notifications() {
+    local buckets
+    buckets=$(docker compose exec -T minio mc ls local/ 2>/dev/null | awk '{print $NF}' | tr -d '/')
+    for b in $buckets; do
+        [ -z "$b" ] && continue
+        docker compose exec -T minio mc event add local/"$b" arn:minio:sqs::indexer:webhook \
+            --event put,delete 2>/dev/null || true
+        echo "  Auto-indexing enabled for bucket: $b"
+    done
+}
+_enable_bucket_notifications
 
 # Install CLI
 echo ""
@@ -135,9 +177,12 @@ fi
 echo ""
 echo "=== databucket installed ==="
 echo ""
-echo "  MinIO API:     http://localhost:9000"
-echo "  MinIO Console: http://localhost:9001"
+echo "  MinIO API:     http://localhost:${MINIO_API_PORT:-9000}"
+echo "  MinIO Console: http://localhost:${MINIO_CONSOLE_PORT:-9001}"
+echo "  Qdrant:        http://localhost:${QDRANT_PORT:-6333}"
+echo "  Indexer:       http://localhost:${INDEXER_PORT:-8900}"
 echo ""
 echo "  databucket bucket create raw"
 echo "  databucket upload myfile.csv raw data/myfile.csv"
+echo "  databucket search 'find invoices from 2025'"
 echo "  databucket update          # pull latest & restart"

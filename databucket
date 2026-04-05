@@ -129,6 +129,10 @@ cmd_bucket_create() {
 s3.create_bucket(Bucket='$1')
 print('Created: $1')
 "
+    # Enable auto-indexing for the new bucket
+    _mc event add local/"$1" arn:minio:sqs::indexer:webhook --event put,delete 2>/dev/null \
+        && echo "Auto-indexing enabled for: $1" \
+        || true
 }
 
 cmd_bucket_delete() {
@@ -367,6 +371,87 @@ for bucket in paginator_buckets['Buckets']:
 }
 
 # ============================================================
+# SEARCH
+# ============================================================
+
+cmd_search() {
+    [ -z "${1:-}" ] && { echo "Usage: databucket search <query> [--bucket <name>] [--limit <n>]"; exit 1; }
+    _s3_env
+    local query="$1"
+    shift
+
+    local bucket="" limit=10
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --bucket) shift; bucket="${1:-}"; shift || true ;;
+            --limit)  shift; limit="${1:-10}"; shift || true ;;
+            *)        shift ;;
+        esac
+    done
+
+    SEARCH_QUERY="$query" SEARCH_BUCKET="$bucket" SEARCH_LIMIT="$limit" \
+    INDEXER_URL="http://localhost:${INDEXER_PORT:-8900}" \
+    python3 -c "
+import os, json, sys
+from urllib.request import Request, urlopen
+
+query = os.environ['SEARCH_QUERY']
+bucket = os.environ.get('SEARCH_BUCKET') or None
+limit = int(os.environ.get('SEARCH_LIMIT', '10'))
+indexer_url = os.environ['INDEXER_URL']
+
+payload = json.dumps({'query': query, 'bucket': bucket, 'limit': limit}).encode()
+req = Request(f'{indexer_url}/search', data=payload, headers={'Content-Type': 'application/json'})
+try:
+    resp = urlopen(req, timeout=10)
+except Exception as e:
+    print(f'ERROR: Indexer not reachable at {indexer_url} — {e}')
+    sys.exit(1)
+results = json.loads(resp.read())
+if not results.get('results'):
+    print('No results.')
+    sys.exit(0)
+for r in results['results']:
+    score = f\"{r['score']:.3f}\"
+    size = r.get('size', 0)
+    for u in ['B','KB','MB','GB','TB']:
+        if size < 1024: break
+        size /= 1024
+    size_str = f'{size:.0f} {u}'
+    print(f'  {score}  s3://{r[\"bucket\"]}/{r[\"key\"]}  ({size_str})')
+    preview = r.get('preview', '')[:120].replace(chr(10), ' ')
+    if preview:
+        print(f'         {preview}')
+"
+}
+
+cmd_index() {
+    [ -z "${1:-}" ] && { echo "Usage: databucket index <bucket>"; exit 1; }
+    _s3_env
+    local bucket="$1"
+
+    echo "Indexing bucket: $bucket ..."
+    INDEX_BUCKET="$bucket" INDEXER_URL="http://localhost:${INDEXER_PORT:-8900}" \
+    python3 -c "
+import os, json, sys
+from urllib.request import Request, urlopen
+
+bucket = os.environ['INDEX_BUCKET']
+indexer_url = os.environ['INDEXER_URL']
+
+req = Request(f'{indexer_url}/index/{bucket}', data=b'', method='POST',
+              headers={'Content-Type': 'application/json'})
+try:
+    resp = urlopen(req, timeout=300)
+except Exception as e:
+    print(f'ERROR: Indexer not reachable — {e}')
+    sys.exit(1)
+result = json.loads(resp.read())
+print(f\"Indexed: {result['indexed']}, Skipped: {result['skipped']}\")
+"
+}
+
+# ============================================================
 # HELP
 # ============================================================
 
@@ -417,6 +502,11 @@ Policies:
   databucket policy create <name> <json>      Create custom policy from JSON
   databucket policy delete <name>             Delete a custom policy
   Built-in: readonly, readwrite, writeonly, diagnostics
+
+Search:
+  databucket search <query>                   Semantic search across all data
+    [--bucket <name>] [--limit <n>]
+  databucket index <bucket>                   Re-index all objects in a bucket
 
 Backup:
   databucket backup [target-dir]              Download all data to local dir
@@ -478,6 +568,8 @@ case "${1:-help}" in
             delete) cmd_policy_delete "${3:-}" ;;
             *)      echo "Usage: databucket policy list|info|create|delete [name]"; exit 1 ;;
         esac ;;
+    search)         shift; cmd_search "$@" ;;
+    index)          shift; cmd_index "$@" ;;
     backup)         shift; cmd_backup "$@" ;;
     help|--help|-h) cmd_help ;;
     *)              echo "Unknown command: $1"; echo ""; cmd_help; exit 1 ;;

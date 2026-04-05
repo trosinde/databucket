@@ -24,9 +24,12 @@ jobs:
       - name: Python syntax check
         run: |
           python -m py_compile mcp-server/server.py
+          python -m py_compile indexer/server.py
+          python -m py_compile indexer/extractors.py
           python -m py_compile tests/conftest.py
           python -m py_compile tests/test_mcp_server.py
           python -m py_compile tests/test_cli_e2e.py
+          python -m py_compile tests/test_indexer.py
 
   e2e-pve3:
     runs-on: ubuntu-latest

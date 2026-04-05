@@ -29,5 +29,39 @@ services:
       MCP_TRANSPORT: stdio
     restart: unless-stopped
 
+  qdrant:
+    image: qdrant/qdrant:latest
+    volumes:
+      - qdrant-data:/qdrant/storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:6333/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  indexer:
+    build: ./indexer
+    ports:
+      - "127.0.0.1:${INDEXER_PORT:-8900}:8900"
+    depends_on:
+      minio:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    environment:
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MCP_ACCESS_KEY:-${MINIO_ROOT_USER}}
+      S3_SECRET_KEY: ${MCP_SECRET_KEY:-${MINIO_ROOT_PASSWORD}}
+      QDRANT_URL: http://qdrant:6333
+      INDEXER_PORT: "8900"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8900/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 volumes:
   databucket-data:
+  qdrant-data:

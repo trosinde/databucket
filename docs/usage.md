@@ -93,6 +93,26 @@ databucket download raw documents/2026/04/report.pdf ./report.pdf
 databucket inspect raw documents/2026/04/report.pdf
 ```
 
+### Semantische Suche
+
+Objekte werden beim Upload automatisch indexiert. Die Suche funktioniert über Inhalte, nicht nur über Dateinamen.
+
+```bash
+# Suche über alle Buckets
+databucket search "quarterly revenue report"
+
+# Suche nur in einem Bucket
+databucket search "sensor data from gateway" --bucket raw
+
+# Mehr Ergebnisse
+databucket search "machine learning" --limit 20
+
+# Manueller Re-Index eines Buckets (z.B. nach Migration)
+databucket index raw
+```
+
+Unterstützte Formate: Text, CSV, JSON, PDF, XML/HTML. Binärdateien werden übersprungen.
+
 ### Als anderer Benutzer arbeiten
 
 ```bash
@@ -310,7 +330,7 @@ with fs.open("curated/report/summary.parquet", "wb") as f:
 
 ## MCP Server
 
-Der MCP Server stellt 8 Tools für Claude und andere AI-Agenten bereit.
+Der MCP Server stellt 9 Tools für Claude und andere AI-Agenten bereit.
 
 ### Verfügbare Tools
 
@@ -324,6 +344,7 @@ Der MCP Server stellt 8 Tools für Claude und andere AI-Agenten bereit.
 | `delete_object` | bucket, key | Objekt löschen |
 | `create_bucket` | bucket | Bucket anlegen |
 | `search_by_prefix` | bucket, prefix, max_keys? | Nach Pfad-Prefix suchen |
+| `semantic_search` | query, bucket?, limit? | KI-Suche über Dateiinhalte |
 
 ### Konfiguration in Claude
 

@@ -20,7 +20,8 @@ The installer sets up the Docker network, prompts for credentials, builds and st
 databucket bucket create raw
 databucket upload myfile.csv raw data/myfile.csv
 databucket ls raw
-databucket update    # pull latest images & restart
+databucket search "find my csv data"    # semantic search
+databucket update                        # pull latest images & restart
 ```
 
 MinIO Console: `http://localhost:9001`
@@ -32,6 +33,7 @@ databucket start/stop/status/logs    # service management
 databucket update                     # pull & restart
 databucket bucket list/create/delete  # bucket management
 databucket upload/download/ls         # data operations
+databucket search/index               # semantic search
 databucket help                       # show all commands
 ```
 
@@ -53,5 +55,6 @@ databucket help                       # show all commands
 ## Stack
 
 - [MinIO](https://min.io) — S3-compatible object storage
-- Python 3.12 — MCP server, CLI
+- [Qdrant](https://qdrant.tech) — vector database for semantic search
+- Python 3.12 — MCP server, indexer, CLI
 - Docker Compose — deployment

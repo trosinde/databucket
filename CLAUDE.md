@@ -5,8 +5,9 @@ Unstructured data storage on MinIO (S3-compatible). TB-scale, Docker-deployed.
 ## Architecture
 
 - **Storage:** MinIO (S3 API on :9000, Web Console on :9001)
-- **MCP Server:** Python, boto3 — exposes S3 operations as MCP tools
-- **CLI:** `databucket` — unified CLI for service management, buckets, upload/download
+- **Search:** Qdrant vector DB (:6333) + Indexer (:8900, FastAPI, sentence-transformers)
+- **MCP Server:** Python, boto3 — exposes S3 operations + semantic_search as MCP tools
+- **CLI:** `databucket` — unified CLI for service management, buckets, upload/download, search
 - **Access:** pandas via s3fs/boto3, REST via S3 API, AI via MCP
 
 ## Quick Start
@@ -15,6 +16,7 @@ Unstructured data storage on MinIO (S3-compatible). TB-scale, Docker-deployed.
 ./install.sh                           # full setup
 databucket bucket create raw
 databucket upload myfile.csv raw data/myfile.csv
+databucket search "find my data"       # semantic search
 databucket update                      # pull latest & restart
 ```
 
@@ -39,6 +41,8 @@ Test system: LXC 300 on pve3 (192.168.100.130)
 - MinIO (object storage)
 - Python 3.12 (MCP server, CLI)
 - boto3 / s3fs (S3 clients)
+- Qdrant (vector database)
+- sentence-transformers (embeddings)
 - Docker Compose (deployment)
 - pytest (testing), GitHub Actions (CI)
 

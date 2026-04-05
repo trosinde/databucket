@@ -118,5 +118,25 @@ def search_by_prefix(bucket: str, prefix: str, max_keys: int = 50) -> str:
     return json.dumps(results)
 
 
+@mcp.tool()
+def semantic_search(query: str, bucket: str = "", limit: int = 10) -> str:
+    """Search objects by meaning using AI embeddings. Returns matching objects ranked by relevance."""
+    import urllib.request
+    import urllib.parse
+
+    indexer_url = os.environ.get("INDEXER_URL", "http://indexer:8900")
+    payload = json.dumps({"query": query, "bucket": bucket or None, "limit": limit}).encode()
+    req = urllib.request.Request(
+        f"{indexer_url}/search",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        resp = urllib.request.urlopen(req, timeout=10)
+        return resp.read().decode()
+    except Exception as e:
+        return json.dumps({"error": f"Indexer not reachable: {e}"})
+
+
 if __name__ == "__main__":
     mcp.run()
