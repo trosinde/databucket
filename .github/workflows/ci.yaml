@@ -66,13 +66,7 @@ jobs:
           # Create test environment for CLI
           TEST_HOME=$(mktemp -d)
           cp /opt/databucket/docker-compose.yaml "$TEST_HOME/"
-          cat > "$TEST_HOME/.env" <<'ENVEOF'
-MINIO_ROOT_USER=admin
-MINIO_ROOT_PASSWORD=databucket-test-2026!
-MINIO_API_PORT=9000
-MINIO_CONSOLE_PORT=9001
-INDEXER_PORT=8900
-ENVEOF
+          printf 'MINIO_ROOT_USER=admin\nMINIO_ROOT_PASSWORD=databucket-test-2026!\nMINIO_API_PORT=9000\nMINIO_CONSOLE_PORT=9001\nINDEXER_PORT=8900\n' > "$TEST_HOME/.env"
 
           # Run e2e tests
           cd ${{ github.workspace }}
