@@ -45,15 +45,15 @@ jobs:
           export PATH="/usr/local/bin:$PATH"
 
           # Update installed files
-          cp databucket /usr/local/bin/databucket
-          cp mcp-server/* /opt/databucket/mcp-server/
-          cp docker-compose.yaml /opt/databucket/
-          cp -r indexer /opt/databucket/
+          sudo cp databucket /usr/local/bin/databucket
+          sudo cp mcp-server/* /opt/databucket/mcp-server/
+          sudo cp docker-compose.yaml /opt/databucket/
+          sudo cp -r indexer /opt/databucket/
 
           # Rebuild and restart
           cd /opt/databucket
-          docker compose build
-          docker compose up -d
+          sudo docker compose build
+          sudo docker compose up -d
 
           # Wait for healthy
           for _i in $(seq 1 30); do
