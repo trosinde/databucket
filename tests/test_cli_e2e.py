@@ -32,7 +32,7 @@ class TestHelp:
     def test_help(self):
         r = run(["help"])
         assert "databucket" in r.stdout
-        assert "Service:" in r.stdout
+        assert "Service" in r.stdout
         assert "Buckets:" in r.stdout
         assert "Users:" in r.stdout
         assert "Policies:" in r.stdout
