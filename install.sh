@@ -95,7 +95,7 @@ docker compose up -d
 
 # Wait for healthy
 echo "Waiting for MinIO to become healthy..."
-for i in $(seq 1 30); do
+for _i in $(seq 1 30); do
     if docker compose ps --format json | grep -q '"healthy"'; then
         break
     fi
