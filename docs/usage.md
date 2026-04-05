@@ -400,16 +400,50 @@ Die GitHub Actions Pipeline (`.github/workflows/ci.yaml`) läuft automatisch bei
 
 ## Remote-Zugriff
 
-Das CLI kann gegen jeden databucket-Server arbeiten — auch remote.
+Das CLI kann gegen jeden databucket-Server arbeiten — auch remote. Kein Docker auf dem Client nötig.
 
-### Profil einrichten
+### Client-Installation
+
+Auf dem Client-Rechner (nicht der Server):
 
 ```bash
+# 1. Voraussetzungen
+pip install boto3 minio
+
+# 2. CLI herunterladen
+curl -o /usr/local/bin/databucket \
+    https://raw.githubusercontent.com/trosinde/databucket/main/databucket
+chmod +x /usr/local/bin/databucket
+```
+
+Alternativ: Repository klonen und CLI verlinken:
+
+```bash
+git clone git@github.com:trosinde/databucket.git
+sudo ln -s $(pwd)/databucket/databucket /usr/local/bin/databucket
+```
+
+### Verbindung einrichten
+
+```bash
+# Profil für einen Server anlegen
 databucket config set production \
     --endpoint http://192.168.100.130:9000 \
     --access-key admin \
     --secret-key geheim123 \
     --indexer-url http://192.168.100.130:8900
+
+# Weitere Profile anlegen
+databucket config set staging \
+    --endpoint http://staging-server:9000 \
+    --access-key admin \
+    --secret-key staging-pass
+
+# Profile auflisten
+databucket config list
+
+# Profil-Details anzeigen (Secret wird maskiert)
+databucket config show production
 ```
 
 Profile werden in `~/.databucket/config` gespeichert (chmod 600).
@@ -417,10 +451,41 @@ Profile werden in `~/.databucket/config` gespeichert (chmod 600).
 ### Mit Profil arbeiten
 
 ```bash
+# Daten-Operationen
 databucket --profile production bucket list
 databucket --profile production upload data.csv raw data/data.csv
+databucket --profile production download raw data/data.csv ./data.csv
+databucket --profile production ls raw
+
+# Semantische Suche
 databucket --profile production search "quarterly report"
+databucket --profile production index raw
+
+# User- und Policy-Verwaltung
 databucket --profile production user list
+databucket --profile production user create analyst
+databucket --profile production user policy analyst readonly
+
+# Einmaliger Zugriff ohne Profil
+databucket --endpoint http://192.168.100.130:9000 bucket list
+```
+
+### Authentifizierung
+
+Der Client authentifiziert sich mit MinIO Access Key + Secret Key. Diese werden im Profil gespeichert.
+
+**Für Benutzer mit eingeschränkten Rechten:**
+
+1. Admin legt User an: `databucket user create analyst`
+2. Admin weist Policy zu: `databucket user policy analyst readonly`
+3. Admin generiert API Key: `databucket user key create analyst`
+4. Benutzer richtet Profil mit dem API Key ein:
+
+```bash
+databucket config set myserver \
+    --endpoint http://server:9000 \
+    --access-key <ACCESS_KEY> \
+    --secret-key <SECRET_KEY>
 ```
 
 ### Remote-fähige Commands
@@ -432,18 +497,41 @@ databucket --profile production user list
 | Suche (search/index) | Ja* | Ja |
 | User/Policy (alle) | Ja | Ja |
 | Backup | Ja | Ja |
+| Config (set/show/list) | Ja | Ja |
 | Service (start/stop/status/logs) | Nein | Ja |
 
 *Suche erfordert `INDEXER_BIND=0.0.0.0` auf dem Server.
 
-### Indexer für Remote-Zugriff öffnen
+### Server: Indexer für Remote-Zugriff öffnen
 
-Auf dem Server in `.env`:
+Standardmäßig ist der Indexer (semantische Suche) nur lokal erreichbar. Um Remote-Suche zu ermöglichen, auf dem **Server** in `.env`:
+
 ```
 INDEXER_BIND=0.0.0.0
 ```
 
 Dann `databucket update` um die Änderung zu übernehmen.
+
+### Typischer Workflow: Remote-Arbeitsplatz einrichten
+
+```bash
+# 1. Auf dem Client: CLI + Dependencies installieren
+pip install boto3 minio
+
+# 2. Profil anlegen (Credentials vom Admin)
+databucket config set work \
+    --endpoint http://datalake.intern:9000 \
+    --access-key XXXXXXXXXXXXXXXXXXXX \
+    --secret-key YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY \
+    --indexer-url http://datalake.intern:8900
+
+# 3. Testen
+databucket --profile work bucket list
+databucket --profile work search "letzte Quartalszahlen"
+
+# 4. Daten hochladen
+databucket --profile work upload report.pdf raw documents/2026/04/report.pdf
+```
 
 ## Troubleshooting
 
