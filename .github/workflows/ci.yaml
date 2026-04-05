@@ -33,52 +33,30 @@ jobs:
           python -m py_compile tests/test_extractors.py
 
   e2e-pve3:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, pve3]
     needs: lint
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy and test on pve3
-        env:
-          PVE3_SSH_KEY: ${{ secrets.PVE3_SSH_KEY }}
-          PVE3_HOST: ${{ secrets.PVE3_HOST }}
+      - name: Deploy and test
         run: |
-          # Setup SSH
-          mkdir -p ~/.ssh
-          echo "$PVE3_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          echo "Host pve3-databucket" >> ~/.ssh/config
-          echo "  HostName $PVE3_HOST" >> ~/.ssh/config
-          echo "  User root" >> ~/.ssh/config
-          echo "  IdentityFile ~/.ssh/deploy_key" >> ~/.ssh/config
-          echo "  IdentitiesOnly yes" >> ~/.ssh/config
-          echo "  StrictHostKeyChecking no" >> ~/.ssh/config
-
-          # Sync code to test system
-          rsync -avz --delete \
-            --exclude='.git' --exclude='.ssh' --exclude='.env' \
-            --exclude='__pycache__' --exclude='.aios' --exclude='.claude' \
-            -e "ssh -o StrictHostKeyChecking=no" \
-            ./ pve3-databucket:/root/databucket/
-
-          # Deploy updated code
-          ssh pve3-databucket bash <<'EOF'
           set -euo pipefail
           export PATH="/usr/local/bin:$PATH"
 
           # Update installed files
-          cp /root/databucket/databucket /usr/local/bin/databucket
-          cp /root/databucket/mcp-server/* /opt/databucket/mcp-server/
-          cp /root/databucket/docker-compose.yaml /opt/databucket/
+          cp databucket /usr/local/bin/databucket
+          cp mcp-server/* /opt/databucket/mcp-server/
+          cp docker-compose.yaml /opt/databucket/
+          cp -r indexer /opt/databucket/
 
           # Rebuild and restart
           cd /opt/databucket
-          docker compose build mcp-server
+          docker compose build
           docker compose up -d
 
           # Wait for healthy
-          for i in $(seq 1 30); do
+          for _i in $(seq 1 30); do
             if curl -sf http://localhost:9000/minio/health/live >/dev/null 2>&1; then
               break
             fi
@@ -86,14 +64,13 @@ jobs:
           done
 
           # Run e2e tests
-          cd /root/databucket
+          cd ${{ github.workspace }}
           export S3_ENDPOINT=http://localhost:9000
           export S3_ACCESS_KEY=admin
           export S3_SECRET_KEY='databucket-test-2026!'
           export DATABUCKET_HOME=/opt/databucket
 
           python3 -m pytest tests/test_mcp_server.py tests/test_cli_e2e.py -v
-          EOF
 
   auto-merge:
     runs-on: ubuntu-latest
