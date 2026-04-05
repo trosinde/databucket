@@ -51,7 +51,7 @@ class TestServiceManagement:
     def test_info(self):
         r = run(["info"])
         assert "databucket" in r.stdout
-        assert "S3 API" in r.stdout
+        assert "Endpoint" in r.stdout
 
 
 class TestBucketE2E:

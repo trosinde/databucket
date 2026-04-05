@@ -225,12 +225,13 @@ cmd_bucket_create() {
 s3.create_bucket(Bucket='$1')
 print('Created: $1')
 "
-    # Enable auto-indexing for the new bucket (local mode only)
+    # Enable auto-indexing for the new bucket (local mode only, best effort)
     if [ "$DATABUCKET_MODE" = "local" ]; then
-        _compose exec -T minio mc alias set local http://localhost:9000 "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" --quiet 2>/dev/null || true
-        if _compose exec -T minio mc event add local/"$1" arn:minio:sqs::indexer:webhook --event put,delete 2>/dev/null; then
+        (
+            _compose exec -T minio mc alias set local http://localhost:9000 "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" --quiet 2>/dev/null &&
+            _compose exec -T minio mc event add local/"$1" arn:minio:sqs::indexer:webhook --event put,delete 2>/dev/null &&
             echo "Auto-indexing enabled for: $1"
-        fi
+        ) 2>/dev/null || true
     fi
 }
 
@@ -409,8 +410,9 @@ cmd_user_disable() {
 
 cmd_user_key_create() {
     [ -z "${1:-}" ] && { echo "Usage: databucket user key create <username>"; exit 1; }
-    _admin "
-resp = json.loads(admin.add_service_account())
+    KEY_USER="$1" _admin "
+import os
+resp = json.loads(admin.add_service_account(name=os.environ['KEY_USER']))
 print(f'Access Key: {resp.get(\"accessKey\", \"\")}')
 print(f'Secret Key: {resp.get(\"secretKey\", \"\")}')
 "
