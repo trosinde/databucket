@@ -146,11 +146,12 @@ _admin() {
     python3 -c "
 import os, json, sys
 from minio.minioadmin import MinioAdmin
+from minio.credentials import StaticProvider
 
 endpoint = os.environ['ADMIN_ENDPOINT'].replace('http://', '').replace('https://', '')
 secure = os.environ['ADMIN_ENDPOINT'].startswith('https')
-admin = MinioAdmin(endpoint, access_key=os.environ['ADMIN_ACCESS_KEY'],
-    secret_key=os.environ['ADMIN_SECRET_KEY'], secure=secure)
+creds = StaticProvider(os.environ['ADMIN_ACCESS_KEY'], os.environ['ADMIN_SECRET_KEY'])
+admin = MinioAdmin(endpoint=endpoint, credentials=creds, secure=secure)
 $1
 "
 }
