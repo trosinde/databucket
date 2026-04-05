@@ -422,8 +422,9 @@ cmd_user_key_list() {
     [ -z "${1:-}" ] && { echo "Usage: databucket user key list <username>"; exit 1; }
     _admin "
 resp = json.loads(admin.list_service_account('$1'))
-for acct in resp.get('accounts', []):
-    print(acct.get('accessKey', ''))
+if resp:
+    for acct in resp.get('accounts', []) or []:
+        print(acct.get('accessKey', ''))
 "
 }
 
