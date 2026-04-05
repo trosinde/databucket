@@ -10,17 +10,17 @@ def extract_text(body: bytes, content_type: str, key: str) -> str | None:
     ct = content_type.lower()
     kl = key.lower()
 
-    # Plain text
-    if "text/" in ct or kl.endswith((".txt", ".md", ".log", ".yaml", ".yml", ".toml")):
-        return _decode(body)
-
-    # CSV / TSV
+    # CSV / TSV (before plain text — text/csv would match "text/" otherwise)
     if "csv" in ct or kl.endswith((".csv", ".tsv")):
         return _extract_csv(body)
 
     # JSON
     if "json" in ct or kl.endswith(".json"):
         return _extract_json(body)
+
+    # Plain text
+    if "text/" in ct or kl.endswith((".txt", ".md", ".log", ".yaml", ".yml", ".toml")):
+        return _decode(body)
 
     # PDF
     if "pdf" in ct or kl.endswith(".pdf"):

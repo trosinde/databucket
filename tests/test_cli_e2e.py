@@ -333,6 +333,93 @@ class TestSearchE2E:
         assert r.returncode == 1
 
 
+class TestConfigE2E:
+    """Tests for the config command and profile system."""
+
+    def test_config_set_and_show(self, tmp_path):
+        """Test creating and reading a config profile."""
+        env = {**ENV, "HOME": str(tmp_path)}
+        result = subprocess.run(
+            [CLI, "config", "set", "test-profile",
+             "--endpoint", "http://192.168.1.100:9000",
+             "--access-key", "testkey",
+             "--secret-key", "testsecret",
+             "--indexer-url", "http://192.168.1.100:8900"],
+            capture_output=True, text=True, env=env,
+        )
+        assert result.returncode == 0
+        assert "saved" in result.stdout.lower()
+
+        # Verify config file exists
+        config_file = tmp_path / ".databucket" / "config"
+        assert config_file.exists()
+
+        # Show profile
+        result = subprocess.run(
+            [CLI, "config", "show", "test-profile"],
+            capture_output=True, text=True, env=env,
+        )
+        assert result.returncode == 0
+        assert "192.168.1.100" in result.stdout
+
+    def test_config_list(self, tmp_path):
+        env = {**ENV, "HOME": str(tmp_path)}
+        # Create two profiles
+        subprocess.run(
+            [CLI, "config", "set", "prod",
+             "--endpoint", "http://prod:9000",
+             "--access-key", "k1", "--secret-key", "s1"],
+            capture_output=True, env=env,
+        )
+        subprocess.run(
+            [CLI, "config", "set", "staging",
+             "--endpoint", "http://staging:9000",
+             "--access-key", "k2", "--secret-key", "s2"],
+            capture_output=True, env=env,
+        )
+
+        result = subprocess.run(
+            [CLI, "config", "list"],
+            capture_output=True, text=True, env=env,
+        )
+        assert result.returncode == 0
+        assert "prod" in result.stdout
+        assert "staging" in result.stdout
+
+    def test_config_set_missing_args(self):
+        r = run(["config", "set"], check=False)
+        assert r.returncode == 1
+
+    def test_config_no_args(self):
+        r = run(["config"], check=False)
+        assert r.returncode == 1
+
+
+class TestRemoteModeGuards:
+    """Test that service management commands fail in remote mode."""
+
+    def test_start_blocked_remote(self):
+        r = run(["--endpoint", "http://remote:9000", "start"], check=False)
+        assert r.returncode == 1
+        assert "only available locally" in r.stdout.lower() or "only available locally" in r.stderr.lower()
+
+    def test_stop_blocked_remote(self):
+        r = run(["--endpoint", "http://remote:9000", "stop"], check=False)
+        assert r.returncode == 1
+
+    def test_status_blocked_remote(self):
+        r = run(["--endpoint", "http://remote:9000", "status"], check=False)
+        assert r.returncode == 1
+
+    def test_logs_blocked_remote(self):
+        r = run(["--endpoint", "http://remote:9000", "logs"], check=False)
+        assert r.returncode == 1
+
+    def test_update_blocked_remote(self):
+        r = run(["--endpoint", "http://remote:9000", "update"], check=False)
+        assert r.returncode == 1
+
+
 class TestUsageErrors:
     def test_bucket_no_args(self):
         r = run(["bucket"], check=False)

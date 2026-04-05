@@ -198,6 +198,7 @@ Root Account (admin)
 | API | S3 (MinIO nativ) | Custom REST API | Kein eigener Code nötig, S3 ist Industriestandard |
 | MCP Server | Eigener (boto3) | Keiner | AI-Zugang gewünscht, dünner Wrapper reicht |
 | Auth | MinIO Access Keys | OAuth, JWT | Einfach, Token-basiert, pro Client konfigurierbar |
+| Admin API | MinIO Admin API (Python `minio` Paket) | `mc` CLI im Container | Remote-fähig, kein Docker-Exec nötig |
 | Deployment | Docker Compose | Kubernetes, Bare Metal | Einzelner Server, kein Orchestrierungsbedarf |
 
 ## Testing & CI

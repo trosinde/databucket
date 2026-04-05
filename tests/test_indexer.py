@@ -191,3 +191,86 @@ class TestWebhook:
 
         # Wait for background processing
         time.sleep(2)
+
+        # Verify removed from index
+        resp = _http("POST", "/search", {"query": "removed from the index", "bucket": test_bucket})
+        assert len(resp["results"]) == 0
+
+
+class TestSearchEdgeCases:
+    """Edge cases for the /search endpoint."""
+
+    def test_empty_query(self, indexer_available):
+        resp = _http("POST", "/search", {"query": "", "limit": 5})
+        assert "results" in resp
+
+    def test_special_chars_in_query(self, indexer_available):
+        resp = _http("POST", "/search", {"query": "file<>with&special\"chars'", "limit": 5})
+        assert "results" in resp
+
+    def test_limit_boundary_min(self, indexer_available):
+        resp = _http("POST", "/search", {"query": "test", "limit": 1})
+        assert "results" in resp
+
+    def test_limit_boundary_max(self, indexer_available):
+        resp = _http("POST", "/search", {"query": "test", "limit": 100})
+        assert "results" in resp
+
+    def test_limit_zero_rejected(self, indexer_available):
+        from urllib.error import HTTPError
+        with pytest.raises(HTTPError) as exc_info:
+            _http("POST", "/search", {"query": "test", "limit": 0})
+        assert exc_info.value.code == 422
+
+    def test_limit_over_max_rejected(self, indexer_available):
+        from urllib.error import HTTPError
+        with pytest.raises(HTTPError) as exc_info:
+            _http("POST", "/search", {"query": "test", "limit": 101})
+        assert exc_info.value.code == 422
+
+    def test_nonexistent_bucket_filter(self, indexer_available):
+        resp = _http("POST", "/search", {"query": "anything", "bucket": "no-such-bucket-xyz"})
+        assert resp["results"] == []
+
+
+class TestWebhookEdgeCases:
+    """Edge cases for the /webhook endpoint."""
+
+    def test_empty_records(self, indexer_available):
+        resp = _http("POST", "/webhook", {"Records": []})
+        assert resp["status"] == "no records"
+
+    def test_no_records_field(self, indexer_available):
+        resp = _http("POST", "/webhook", {})
+        assert resp["status"] == "no records"
+
+    def test_record_missing_bucket(self, indexer_available):
+        event = {"Records": [{"eventName": "s3:ObjectCreated:Put", "s3": {"bucket": {}, "object": {"key": "t.txt"}}}]}
+        resp = _http("POST", "/webhook", event)
+        assert resp["status"] == "accepted"
+
+    def test_record_missing_key(self, indexer_available):
+        event = {"Records": [{"eventName": "s3:ObjectCreated:Put", "s3": {"bucket": {"name": "b"}, "object": {}}}]}
+        resp = _http("POST", "/webhook", event)
+        assert resp["status"] == "accepted"
+
+
+class TestIndexEndpointEdgeCases:
+    """Edge cases for the /index/{bucket} endpoint."""
+
+    def test_index_empty_bucket(self, s3, test_bucket, indexer_available):
+        resp = _http("POST", f"/index/{test_bucket}")
+        assert resp["indexed"] == 0
+        assert resp["skipped"] == 0
+
+    def test_index_short_text_skipped(self, s3, test_bucket, indexer_available):
+        s3.put_object(Bucket=test_bucket, Key="tiny.txt", Body=b"Hi", ContentType="text/plain")
+        resp = _http("POST", f"/index/{test_bucket}")
+        assert resp["skipped"] >= 1
+
+    def test_index_is_idempotent(self, s3, test_bucket, indexer_available):
+        s3.put_object(Bucket=test_bucket, Key="stable.txt",
+                      Body=b"Stable content indexed twice for idempotency", ContentType="text/plain")
+        resp1 = _http("POST", f"/index/{test_bucket}")
+        resp2 = _http("POST", f"/index/{test_bucket}")
+        assert resp1["indexed"] == resp2["indexed"]

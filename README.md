@@ -41,7 +41,7 @@ databucket help                       # show all commands
 
 | Method | Use case |
 |--------|----------|
-| `databucket` CLI | Admin, upload/download, service management |
+| `databucket` CLI | Admin, upload/download, search (local + remote via profiles) |
 | `pandas` / `s3fs` | Data analysis |
 | `boto3` | Automation, scripts |
 | MCP Server | Claude, AI agents |

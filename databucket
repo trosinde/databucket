@@ -4,6 +4,8 @@ set -euo pipefail
 DATABUCKET_HOME="${DATABUCKET_HOME:-/opt/databucket}"
 DATABUCKET_USER=""
 DATABUCKET_PASS=""
+DATABUCKET_PROFILE=""
+DATABUCKET_MODE="local"
 
 # ============================================================
 # GLOBAL FLAGS (parsed before command routing)
@@ -23,6 +25,13 @@ _parse_global_flags() {
                     read -rsp "Password for $DATABUCKET_USER: " DATABUCKET_PASS; echo ""
                 fi
                 ;;
+            --profile)
+                shift; DATABUCKET_PROFILE="${1:-}"; shift
+                [ -z "$DATABUCKET_PROFILE" ] && { echo "ERROR: --profile requires a name"; exit 1; }
+                ;;
+            --endpoint)
+                shift; export DATABUCKET_ENDPOINT="${1:-}"; shift
+                ;;
             *)  ARGS+=("$1"); shift ;;
         esac
     done
@@ -40,22 +49,73 @@ _compose() {
     docker compose -f "$DATABUCKET_HOME/docker-compose.yaml" --env-file "$DATABUCKET_HOME/.env" "$@"
 }
 
-_s3_env() {
-    set -a
-    source "$DATABUCKET_HOME/.env"
-    set +a
-    export S3_ENDPOINT="${S3_ENDPOINT:-http://localhost:${MINIO_API_PORT:-9000}}"
+_resolve_config() {
+    # Already resolved?
+    [ -n "${_CONFIG_RESOLVED:-}" ] && return
+    _CONFIG_RESOLVED=1
+
+    # 1. Explicit --endpoint flag
+    if [ -n "${DATABUCKET_ENDPOINT:-}" ]; then
+        export S3_ENDPOINT="$DATABUCKET_ENDPOINT"
+        DATABUCKET_MODE="remote"
+    fi
+
+    # 2. Profile from config file
+    local config="$HOME/.databucket/config"
+    local profile="${DATABUCKET_PROFILE:-}"
+    if [ -n "$profile" ] && [ -f "$config" ]; then
+        eval "$(python3 -c "
+import configparser, os
+c = configparser.ConfigParser()
+c.read(os.path.expanduser('~/.databucket/config'))
+p = '$profile'
+if c.has_section(p):
+    for k, v in c.items(p):
+        print(f'export DATABUCKET_{k.upper()}=\"{v}\"')
+else:
+    print(f'echo \"ERROR: Profile \"{p}\" not found in {os.path.expanduser(\"~/.databucket/config\")}\"; exit 1')
+")"
+        DATABUCKET_MODE="remote"
+    elif [ -z "$profile" ] && [ -f "$config" ]; then
+        # Try default profile silently
+        eval "$(python3 -c "
+import configparser, os
+c = configparser.ConfigParser()
+c.read(os.path.expanduser('~/.databucket/config'))
+if c.has_section('default'):
+    for k, v in c.items('default'):
+        print(f'export DATABUCKET_{k.upper()}=\"{v}\"')
+" 2>/dev/null)" || true
+    fi
+
+    # 3. Map config vars to S3 vars
+    [ -n "${DATABUCKET_ENDPOINT:-}" ] && export S3_ENDPOINT="$DATABUCKET_ENDPOINT"
+    [ -n "${DATABUCKET_ACCESS_KEY:-}" ] && export AWS_ACCESS_KEY_ID="$DATABUCKET_ACCESS_KEY"
+    [ -n "${DATABUCKET_SECRET_KEY:-}" ] && export AWS_SECRET_ACCESS_KEY="$DATABUCKET_SECRET_KEY"
+    [ -n "${DATABUCKET_INDEXER_URL:-}" ] && export INDEXER_URL="$DATABUCKET_INDEXER_URL"
+
+    # 4. Fallback: local .env
+    if [ -z "${S3_ENDPOINT:-}" ] && [ -f "$DATABUCKET_HOME/.env" ]; then
+        set -a
+        source "$DATABUCKET_HOME/.env"
+        set +a
+        export S3_ENDPOINT="${S3_ENDPOINT:-http://localhost:${MINIO_API_PORT:-9000}}"
+        export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-$MINIO_ROOT_USER}"
+        export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-$MINIO_ROOT_PASSWORD}"
+        DATABUCKET_MODE="local"
+    fi
+
+    # --as user override
     if [ -n "$DATABUCKET_USER" ]; then
         export AWS_ACCESS_KEY_ID="$DATABUCKET_USER"
         export AWS_SECRET_ACCESS_KEY="$DATABUCKET_PASS"
-    else
-        export AWS_ACCESS_KEY_ID="$MINIO_ROOT_USER"
-        export AWS_SECRET_ACCESS_KEY="$MINIO_ROOT_PASSWORD"
     fi
 }
 
+_s3_env() { _resolve_config; }
+
 _s3() {
-    _s3_env
+    _resolve_config
     python3 -c "
 import boto3, sys, json
 from botocore.config import Config
@@ -67,22 +127,41 @@ $1
 "
 }
 
-_mc() {
-    _s3_env
-    _compose exec -T minio mc alias set local http://localhost:9000 "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" --quiet 2>/dev/null || true
-    _compose exec -T minio mc "$@"
+_admin() {
+    _resolve_config
+    ADMIN_ENDPOINT="$S3_ENDPOINT" ADMIN_ACCESS_KEY="$AWS_ACCESS_KEY_ID" \
+    ADMIN_SECRET_KEY="$AWS_SECRET_ACCESS_KEY" \
+    python3 -c "
+import os, json, sys
+from minio.minioadmin import MinioAdmin
+
+endpoint = os.environ['ADMIN_ENDPOINT'].replace('http://', '').replace('https://', '')
+secure = os.environ['ADMIN_ENDPOINT'].startswith('https')
+admin = MinioAdmin(endpoint, access_key=os.environ['ADMIN_ACCESS_KEY'],
+    secret_key=os.environ['ADMIN_SECRET_KEY'], secure=secure)
+$1
+"
+}
+
+_require_local() {
+    _resolve_config
+    if [ "$DATABUCKET_MODE" = "remote" ]; then
+        echo "ERROR: '$1' is only available locally (on the databucket host)."
+        exit 1
+    fi
 }
 
 # ============================================================
 # SERVICE
 # ============================================================
 
-cmd_start()  { _compose up -d; echo "databucket started."; }
-cmd_stop()   { _compose down; echo "databucket stopped."; }
-cmd_status() { _compose ps; }
-cmd_logs()   { _compose logs "${@:---tail=50}"; }
+cmd_start()  { _require_local "start";  _compose up -d; echo "databucket started."; }
+cmd_stop()   { _require_local "stop";   _compose down; echo "databucket stopped."; }
+cmd_status() { _require_local "status"; _compose ps; }
+cmd_logs()   { _require_local "logs";   _compose logs "${@:---tail=50}"; }
 
 cmd_update() {
+    _require_local "update"
     echo "Updating databucket..."
     cd "$DATABUCKET_HOME"
     _compose pull
@@ -92,15 +171,19 @@ cmd_update() {
 }
 
 cmd_info() {
-    _s3_env
+    _resolve_config
     echo "databucket"
-    echo "  Home:     $DATABUCKET_HOME"
-    echo "  S3 API:   $S3_ENDPOINT"
-    echo "  Console:  http://localhost:${MINIO_CONSOLE_PORT:-9001}"
+    echo "  Endpoint: $S3_ENDPOINT"
+    echo "  Mode:     $DATABUCKET_MODE"
     [ -n "$DATABUCKET_USER" ] && echo "  User:     $DATABUCKET_USER"
-    echo ""
-    echo "Services:"
-    _compose ps --format "  {{.Name}}\t{{.Status}}"
+    [ -n "$DATABUCKET_PROFILE" ] && echo "  Profile:  $DATABUCKET_PROFILE"
+    if [ "$DATABUCKET_MODE" = "local" ]; then
+        echo "  Home:     $DATABUCKET_HOME"
+        echo "  Console:  http://localhost:${MINIO_CONSOLE_PORT:-9001}"
+        echo ""
+        echo "Services:"
+        _compose ps --format "  {{.Name}}\t{{.Status}}"
+    fi
     echo ""
     echo "Buckets:"
     _s3 "
@@ -129,10 +212,13 @@ cmd_bucket_create() {
 s3.create_bucket(Bucket='$1')
 print('Created: $1')
 "
-    # Enable auto-indexing for the new bucket
-    _mc event add local/"$1" arn:minio:sqs::indexer:webhook --event put,delete 2>/dev/null \
-        && echo "Auto-indexing enabled for: $1" \
-        || true
+    # Enable auto-indexing for the new bucket (local mode only)
+    if [ "$DATABUCKET_MODE" = "local" ]; then
+        _compose exec -T minio mc alias set local http://localhost:9000 "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" --quiet 2>/dev/null || true
+        _compose exec -T minio mc event add local/"$1" arn:minio:sqs::indexer:webhook --event put,delete 2>/dev/null \
+            && echo "Auto-indexing enabled for: $1" \
+            || true
+    fi
 }
 
 cmd_bucket_delete() {
@@ -253,8 +339,29 @@ if tags:
 # USERS
 # ============================================================
 
-cmd_user_list()   { _mc admin user list local; }
-cmd_user_info()   { [ -z "${1:-}" ] && { echo "Usage: databucket user info <name>"; exit 1; }; _mc admin user info local "$1"; }
+cmd_user_list() {
+    _admin "
+users = json.loads(admin.user_list())
+for name, info in users.items():
+    status = info.get('status', '')
+    print(f'{name}\t{status}')
+"
+}
+
+cmd_user_info() {
+    [ -z "${1:-}" ] && { echo "Usage: databucket user info <name>"; exit 1; }
+    _admin "
+info = json.loads(admin.user_info('$1'))
+print(f'User:     $1')
+print(f'Status:   {info.get(\"status\", \"\")}')
+policies = info.get('policyName', '')
+if policies:
+    print(f'Policies: {policies}')
+member_of = info.get('memberOf', [])
+if member_of:
+    print(f'Groups:   {\", \".join(member_of)}')
+"
+}
 
 cmd_user_create() {
     [ -z "${1:-}" ] && { echo "Usage: databucket user create <name> [password]"; exit 1; }
@@ -264,58 +371,91 @@ cmd_user_create() {
         read -rsp "Password for $username (min 8 chars): " password; echo ""
         [ ${#password} -lt 8 ] && { echo "ERROR: Password must be at least 8 characters."; exit 1; }
     fi
-    _mc admin user add local "$username" "$password"
-    echo "Created: $username"
-    echo "Next: databucket user policy $username readwrite"
+    USER_NAME="$username" USER_PASS="$password" _admin "
+import os
+admin.user_add(os.environ['USER_NAME'], os.environ['USER_PASS'])
+print(f'Created: {os.environ[\"USER_NAME\"]}')
+print(f'Next: databucket user policy {os.environ[\"USER_NAME\"]} readwrite')
+"
 }
 
-cmd_user_delete() { [ -z "${1:-}" ] && { echo "Usage: databucket user delete <name>"; exit 1; }; _mc admin user remove local "$1"; echo "Deleted: $1"; }
-cmd_user_enable() { [ -z "${1:-}" ] && { echo "Usage: databucket user enable <name>"; exit 1; }; _mc admin user enable local "$1"; echo "Enabled: $1"; }
-cmd_user_disable(){ [ -z "${1:-}" ] && { echo "Usage: databucket user disable <name>"; exit 1; }; _mc admin user disable local "$1"; echo "Disabled: $1"; }
+cmd_user_delete() {
+    [ -z "${1:-}" ] && { echo "Usage: databucket user delete <name>"; exit 1; }
+    _admin "admin.user_remove('$1'); print('Deleted: $1')"
+}
+
+cmd_user_enable() {
+    [ -z "${1:-}" ] && { echo "Usage: databucket user enable <name>"; exit 1; }
+    _admin "admin.user_enable('$1'); print('Enabled: $1')"
+}
+
+cmd_user_disable() {
+    [ -z "${1:-}" ] && { echo "Usage: databucket user disable <name>"; exit 1; }
+    _admin "admin.user_disable('$1'); print('Disabled: $1')"
+}
 
 cmd_user_key_create() {
     [ -z "${1:-}" ] && { echo "Usage: databucket user key create <username>"; exit 1; }
-    _mc admin user svcacct add local "$1"
+    _admin "
+resp = json.loads(admin.add_service_account())
+print(f'Access Key: {resp.get(\"accessKey\", \"\")}')
+print(f'Secret Key: {resp.get(\"secretKey\", \"\")}')
+"
 }
 
 cmd_user_key_list() {
     [ -z "${1:-}" ] && { echo "Usage: databucket user key list <username>"; exit 1; }
-    _mc admin user svcacct list local "$1"
+    _admin "
+resp = json.loads(admin.list_service_account('$1'))
+for acct in resp.get('accounts', []):
+    print(acct.get('accessKey', ''))
+"
 }
 
 cmd_user_key_delete() {
     [ -z "${1:-}" ] && { echo "Usage: databucket user key delete <access-key>"; exit 1; }
-    _mc admin user svcacct remove local "$1"
-    echo "Deleted key: $1"
+    _admin "admin.delete_service_account('$1'); print('Deleted key: $1')"
 }
 
 cmd_user_policy() {
     [ -z "${2:-}" ] && { echo "Usage: databucket user policy <name> <policy>"; echo ""; echo "Built-in policies: readonly, readwrite, writeonly"; echo "Custom policies:   databucket policy list"; exit 1; }
-    _mc admin policy attach local "$2" --user "$1"
-    echo "Attached '$2' to user '$1'"
+    _admin "admin.attach_policy(['$2'], user='$1'); print(\"Attached '$2' to user '$1'\")"
 }
 
 # ============================================================
 # POLICIES
 # ============================================================
 
-cmd_policy_list() { _mc admin policy list local; }
-cmd_policy_info() { [ -z "${1:-}" ] && { echo "Usage: databucket policy info <name>"; exit 1; }; _mc admin policy info local "$1"; }
+cmd_policy_list() {
+    _admin "
+resp = json.loads(admin.policy_list())
+for name in sorted(resp.keys()):
+    print(name)
+"
+}
+
+cmd_policy_info() {
+    [ -z "${1:-}" ] && { echo "Usage: databucket policy info <name>"; exit 1; }
+    _admin "
+resp = json.loads(admin.policy_info('$1'))
+print(json.dumps(resp, indent=2))
+"
+}
 
 cmd_policy_create() {
     [ -z "${2:-}" ] && { echo "Usage: databucket policy create <name> <json-file>"; echo ""; _policy_create_help; exit 1; }
     local name="$1" file="$2"
     [ ! -f "$file" ] && { echo "ERROR: File not found: $file"; exit 1; }
-    # Copy policy file into container and apply
-    docker cp "$file" "$(_compose ps -q minio):/tmp/policy.json"
-    _mc admin policy create local "$name" /tmp/policy.json
-    echo "Created policy: $name"
+    POLICY_NAME="$name" POLICY_FILE="$file" _admin "
+import os
+admin.policy_add(os.environ['POLICY_NAME'], policy_file=os.environ['POLICY_FILE'])
+print(f'Created policy: {os.environ[\"POLICY_NAME\"]}')
+"
 }
 
 cmd_policy_delete() {
     [ -z "${1:-}" ] && { echo "Usage: databucket policy delete <name>"; exit 1; }
-    _mc admin policy remove local "$1"
-    echo "Deleted policy: $1"
+    _admin "admin.policy_remove('$1'); print('Deleted policy: $1')"
 }
 
 _policy_create_help() {
@@ -390,7 +530,7 @@ cmd_search() {
     done
 
     SEARCH_QUERY="$query" SEARCH_BUCKET="$bucket" SEARCH_LIMIT="$limit" \
-    INDEXER_URL="http://localhost:${INDEXER_PORT:-8900}" \
+    INDEXER_URL="${INDEXER_URL:-http://localhost:${INDEXER_PORT:-8900}}" \
     python3 -c "
 import os, json, sys
 from urllib.request import Request, urlopen
@@ -431,7 +571,7 @@ cmd_index() {
     local bucket="$1"
 
     echo "Indexing bucket: $bucket ..."
-    INDEX_BUCKET="$bucket" INDEXER_URL="http://localhost:${INDEXER_PORT:-8900}" \
+    INDEX_BUCKET="$bucket" INDEXER_URL="${INDEXER_URL:-http://localhost:${INDEXER_PORT:-8900}}" \
     python3 -c "
 import os, json, sys
 from urllib.request import Request, urlopen
@@ -452,6 +592,96 @@ print(f\"Indexed: {result['indexed']}, Skipped: {result['skipped']}\")
 }
 
 # ============================================================
+# CONFIG
+# ============================================================
+
+cmd_config() {
+    local config_dir="$HOME/.databucket"
+    local config_file="$config_dir/config"
+
+    case "${1:-}" in
+        set)
+            [ -z "${2:-}" ] && { echo "Usage: databucket config set <profile> --endpoint <url> --access-key <key> --secret-key <secret> [--indexer-url <url>]"; exit 1; }
+            local profile="$2"
+            shift 2
+            local endpoint="" access_key="" secret_key="" indexer_url=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --endpoint)    shift; endpoint="${1:-}"; shift ;;
+                    --access-key)  shift; access_key="${1:-}"; shift ;;
+                    --secret-key)  shift; secret_key="${1:-}"; shift ;;
+                    --indexer-url) shift; indexer_url="${1:-}"; shift ;;
+                    *)             shift ;;
+                esac
+            done
+            [ -z "$endpoint" ] || [ -z "$access_key" ] || [ -z "$secret_key" ] && {
+                echo "ERROR: --endpoint, --access-key, and --secret-key are required."
+                exit 1
+            }
+            mkdir -p "$config_dir"
+            CONFIG_PROFILE="$profile" CONFIG_ENDPOINT="$endpoint" CONFIG_ACCESS_KEY="$access_key" \
+            CONFIG_SECRET_KEY="$secret_key" CONFIG_INDEXER_URL="$indexer_url" \
+            CONFIG_FILE="$config_file" \
+            python3 -c "
+import configparser, os
+c = configparser.ConfigParser()
+f = os.environ['CONFIG_FILE']
+if os.path.exists(f):
+    c.read(f)
+p = os.environ['CONFIG_PROFILE']
+if not c.has_section(p):
+    c.add_section(p)
+c.set(p, 'endpoint', os.environ['CONFIG_ENDPOINT'])
+c.set(p, 'access_key', os.environ['CONFIG_ACCESS_KEY'])
+c.set(p, 'secret_key', os.environ['CONFIG_SECRET_KEY'])
+iu = os.environ.get('CONFIG_INDEXER_URL', '')
+if iu:
+    c.set(p, 'indexer_url', iu)
+with open(f, 'w') as fh:
+    c.write(fh)
+os.chmod(f, 0o600)
+print(f'Profile \"{p}\" saved to {f}')
+"
+            ;;
+        show)
+            local profile="${2:-default}"
+            [ ! -f "$config_file" ] && { echo "No config file found at $config_file"; exit 1; }
+            python3 -c "
+import configparser
+c = configparser.ConfigParser()
+c.read('$config_file')
+p = '$profile'
+if not c.has_section(p):
+    print(f'Profile \"{p}\" not found.'); exit(1)
+print(f'[{p}]')
+for k, v in c.items(p):
+    display = v if k != 'secret_key' else v[:4] + '****'
+    print(f'  {k} = {display}')
+"
+            ;;
+        list)
+            [ ! -f "$config_file" ] && { echo "No config file found at $config_file"; exit 1; }
+            python3 -c "
+import configparser
+c = configparser.ConfigParser()
+c.read('$config_file')
+for s in c.sections():
+    ep = c.get(s, 'endpoint', fallback='')
+    print(f'{s}\t{ep}')
+"
+            ;;
+        *)
+            echo "Usage: databucket config set|show|list"
+            echo ""
+            echo "  databucket config set <profile> --endpoint <url> --access-key <key> --secret-key <secret>"
+            echo "  databucket config show [profile]"
+            echo "  databucket config list"
+            exit 1
+            ;;
+    esac
+}
+
+# ============================================================
 # HELP
 # ============================================================
 
@@ -461,9 +691,10 @@ databucket — unstructured data storage
 
 Global flags:
   --as <user> [--password <pass>]     Run command as a specific user
-                                      (prompts for password if omitted)
+  --profile <name>                    Use a named connection profile
+  --endpoint <url>                    Override S3 endpoint URL
 
-Service:
+Service (local only):
   databucket start                            Start services
   databucket stop                             Stop services
   databucket status                           Show service status
@@ -510,6 +741,12 @@ Search:
 
 Backup:
   databucket backup [target-dir]              Download all data to local dir
+
+Config:
+  databucket config set <profile>             Save connection profile
+    --endpoint <url> --access-key <key> --secret-key <secret>
+  databucket config show [profile]            Show profile details
+  databucket config list                      List all profiles
 
 Examples:
   databucket user create analyst              # interactive password
@@ -571,6 +808,7 @@ case "${1:-help}" in
     search)         shift; cmd_search "$@" ;;
     index)          shift; cmd_index "$@" ;;
     backup)         shift; cmd_backup "$@" ;;
+    config)         shift; cmd_config "$@" ;;
     help|--help|-h) cmd_help ;;
     *)              echo "Unknown command: $1"; echo ""; cmd_help; exit 1 ;;
 esac

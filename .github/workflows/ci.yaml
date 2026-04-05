@@ -30,6 +30,7 @@ jobs:
           python -m py_compile tests/test_mcp_server.py
           python -m py_compile tests/test_cli_e2e.py
           python -m py_compile tests/test_indexer.py
+          python -m py_compile tests/test_extractors.py
 
   e2e-pve3:
     runs-on: ubuntu-latest

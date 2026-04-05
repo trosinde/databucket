@@ -7,8 +7,8 @@ Unstructured data storage on MinIO (S3-compatible). TB-scale, Docker-deployed.
 - **Storage:** MinIO (S3 API on :9000, Web Console on :9001)
 - **Search:** Qdrant vector DB (:6333) + Indexer (:8900, FastAPI, sentence-transformers)
 - **MCP Server:** Python, boto3 — exposes S3 operations + semantic_search as MCP tools
-- **CLI:** `databucket` — unified CLI for service management, buckets, upload/download, search
-- **Access:** pandas via s3fs/boto3, REST via S3 API, AI via MCP
+- **CLI:** `databucket` — unified CLI for service management, buckets, upload/download, search (local + remote)
+- **Access:** pandas via s3fs/boto3, REST via S3 API, AI via MCP, remote CLI via profiles
 
 ## Quick Start
 

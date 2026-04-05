@@ -26,6 +26,11 @@ if ! python3 -c "import boto3" 2>/dev/null; then
     pip install --quiet boto3
 fi
 
+if ! python3 -c "import minio" 2>/dev/null; then
+    echo "Installing minio..."
+    pip install --quiet minio
+fi
+
 # Install directory
 echo "Install directory: $INSTALL_DIR"
 sudo mkdir -p "$INSTALL_DIR"

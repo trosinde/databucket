@@ -398,6 +398,53 @@ Die GitHub Actions Pipeline (`.github/workflows/ci.yaml`) läuft automatisch bei
 2. **Unit Tests** — S3-Operationen gegen MinIO Service Container
 3. **E2E Tests** — CLI-Befehle gegen echtes MinIO
 
+## Remote-Zugriff
+
+Das CLI kann gegen jeden databucket-Server arbeiten — auch remote.
+
+### Profil einrichten
+
+```bash
+databucket config set production \
+    --endpoint http://192.168.100.130:9000 \
+    --access-key admin \
+    --secret-key geheim123 \
+    --indexer-url http://192.168.100.130:8900
+```
+
+Profile werden in `~/.databucket/config` gespeichert (chmod 600).
+
+### Mit Profil arbeiten
+
+```bash
+databucket --profile production bucket list
+databucket --profile production upload data.csv raw data/data.csv
+databucket --profile production search "quarterly report"
+databucket --profile production user list
+```
+
+### Remote-fähige Commands
+
+| Kategorie | Remote | Lokal |
+|-----------|--------|-------|
+| Buckets (list/create/delete/info) | Ja | Ja |
+| Daten (upload/download/ls/inspect) | Ja | Ja |
+| Suche (search/index) | Ja* | Ja |
+| User/Policy (alle) | Ja | Ja |
+| Backup | Ja | Ja |
+| Service (start/stop/status/logs) | Nein | Ja |
+
+*Suche erfordert `INDEXER_BIND=0.0.0.0` auf dem Server.
+
+### Indexer für Remote-Zugriff öffnen
+
+Auf dem Server in `.env`:
+```
+INDEXER_BIND=0.0.0.0
+```
+
+Dann `databucket update` um die Änderung zu übernehmen.
+
 ## Troubleshooting
 
 ### MinIO startet nicht
