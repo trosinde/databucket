@@ -75,6 +75,17 @@ jobs:
           export S3_SECRET_KEY='databucket-test-2026!'
           export DATABUCKET_HOME="$TEST_HOME"
 
+          # Clean up leftover test buckets from previous runs
+          python3 -c "
+import boto3; from botocore.config import Config
+s3 = boto3.client('s3', endpoint_url='http://localhost:9000', aws_access_key_id='admin', aws_secret_access_key='databucket-test-2026!', config=Config(signature_version='s3v4'))
+for b in s3.list_buckets()['Buckets']:
+    if b['Name'].startswith('e2e-') or b['Name'].startswith('test-'):
+        for obj in s3.list_objects_v2(Bucket=b['Name']).get('Contents', []):
+            s3.delete_object(Bucket=b['Name'], Key=obj['Key'])
+        s3.delete_bucket(Bucket=b['Name'])
+" || true
+
           python3 -m pytest tests/test_mcp_server.py tests/test_cli_e2e.py -v
 
           rm -rf "$TEST_HOME"
