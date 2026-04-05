@@ -97,6 +97,7 @@ if c.has_section('default'):
     # 4. Fallback: local .env
     if [ -z "${S3_ENDPOINT:-}" ] && [ -f "$DATABUCKET_HOME/.env" ]; then
         set -a
+        # shellcheck source=/dev/null
         source "$DATABUCKET_HOME/.env"
         set +a
         export S3_ENDPOINT="${S3_ENDPOINT:-http://localhost:${MINIO_API_PORT:-9000}}"
@@ -215,9 +216,9 @@ print('Created: $1')
     # Enable auto-indexing for the new bucket (local mode only)
     if [ "$DATABUCKET_MODE" = "local" ]; then
         _compose exec -T minio mc alias set local http://localhost:9000 "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" --quiet 2>/dev/null || true
-        _compose exec -T minio mc event add local/"$1" arn:minio:sqs::indexer:webhook --event put,delete 2>/dev/null \
-            && echo "Auto-indexing enabled for: $1" \
-            || true
+        if _compose exec -T minio mc event add local/"$1" arn:minio:sqs::indexer:webhook --event put,delete 2>/dev/null; then
+            echo "Auto-indexing enabled for: $1"
+        fi
     fi
 }
 

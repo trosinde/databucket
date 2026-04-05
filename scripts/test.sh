@@ -28,7 +28,7 @@ if ! curl -sf http://localhost:9000/minio/health/live >/dev/null 2>&1; then
     echo "Starting test MinIO..."
     docker compose -f docker-compose.test.yaml up -d
     echo "Waiting for MinIO..."
-    for i in $(seq 1 30); do
+    for _i in $(seq 1 30); do
         if curl -sf http://localhost:9000/minio/health/live >/dev/null 2>&1; then
             break
         fi
@@ -45,7 +45,7 @@ if [ "$COVERAGE" = true ]; then
     COV_ARGS="--cov=mcp-server --cov-report=term-missing --cov-report=html:htmlcov"
 fi
 
-python3 -m pytest tests/test_mcp_server.py -v $COV_ARGS
+python3 -m pytest tests/test_mcp_server.py -v "$COV_ARGS"
 
 # E2E tests
 if [ "$RUN_E2E" = true ]; then
@@ -63,7 +63,7 @@ MINIO_CONSOLE_PORT=9001
 EOF
 
     export DATABUCKET_HOME="$DATABUCKET_TEST_HOME"
-    python3 -m pytest tests/test_cli_e2e.py -v $COV_ARGS
+    python3 -m pytest tests/test_cli_e2e.py -v "$COV_ARGS"
 
     rm -rf "$DATABUCKET_TEST_HOME"
 fi

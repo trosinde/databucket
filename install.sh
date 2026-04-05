@@ -112,6 +112,7 @@ _mc_setup() {
     docker compose exec -T minio mc admin user add local "$MCP_KEY" "$MCP_SECRET" 2>/dev/null || true
     docker compose exec -T minio mc admin policy attach local readwrite --user "$MCP_KEY" 2>/dev/null || true
 }
+# shellcheck source=/dev/null
 source "$INSTALL_DIR/.env"
 MINIO_USER="$MINIO_ROOT_USER"
 MINIO_PASS="$MINIO_ROOT_PASSWORD"
@@ -130,8 +131,8 @@ docker compose up -d
 
 # Wait for indexer to become healthy
 echo "Waiting for indexer to start..."
-for i in $(seq 1 60); do
-    if curl -sf http://localhost:${INDEXER_PORT:-8900}/health >/dev/null 2>&1; then
+for _i in $(seq 1 60); do
+    if curl -sf "http://localhost:${INDEXER_PORT:-8900}/health" >/dev/null 2>&1; then
         break
     fi
     sleep 1
